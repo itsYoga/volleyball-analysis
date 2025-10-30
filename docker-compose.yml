@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Redis服務
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # PostgreSQL數據庫
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: volleyball_analysis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 後端API服務
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/volleyball_analysis
+      - REDIS_URL=redis://redis:6379/0
+      - BALL_MODEL_PATH=/app/models/ball_model.onnx
+      - ACTION_MODEL_PATH=/app/models/action_model.pt
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      - postgres
+      - redis
+
+  # AI處理工作器
+  ai_worker:
+    build: ./ai_core
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - BALL_MODEL_PATH=/app/models/ball_model.onnx
+      - ACTION_MODEL_PATH=/app/models/action_model.pt
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      - redis
+    command: celery -A worker worker --loglevel=info
+
+  # 前端服務
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  redis_data:
+  postgres_data:
