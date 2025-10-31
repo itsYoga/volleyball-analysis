@@ -1,44 +1,123 @@
-# Node / React
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ============================================
+# Node.js / React
+# ============================================
 frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+frontend/build/
+frontend/.cache/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
+# ============================================
+# Environment & Config
+# ============================================
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.local
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
-# Builds
-frontend/build/
-backend/__pycache__/
-
-# Data & uploads
+# ============================================
+# Data & Media Files
+# ============================================
+# Uploaded videos and analysis results
 data/uploads/
 data/results/
 backend/data/uploads/
 backend/data/results/
-static/
+static/uploads/
+static/results/
 
-# Models (large files)
-models/*.pt
-models/*.onnx
-models/*.bin
-models/
-
-# OS
-.DS_Store
-
-# Videos
-test_video/
+# Video files (any format)
 *.mp4
 *.avi
 *.mov
 *.wmv
 *.flv
+*.mkv
+*.webm
+*.m4v
+test_video/
 
-# External source folders
+# ============================================
+# Models & Large Files
+# ============================================
+# AI model files (too large for Git)
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.bin
+models/*.h5
+models/*.pb
+models/*.tflite
+models/checkpoints/
+models/weights/
+
+# ============================================
+# IDE & Editor
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# ============================================
+# Testing & Coverage
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+tests/.pytest_cache/
+*.cover
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+
+# ============================================
+# Logs & Temporary Files
+# ============================================
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# ============================================
+# External Source Folders
+# ============================================
 volleyball_analytics-main/

@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 # 創建必要的目錄
 echo "📁 創建目錄結構..."
-mkdir -p data/uploads data/results models static
+mkdir -p data/uploads data/results backend/data/uploads backend/data/results models static
 
 # 複製現有模型 (如果存在)
 echo "🤖 檢查並複製模型文件..."
