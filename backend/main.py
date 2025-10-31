@@ -222,8 +222,14 @@ async def process_video(video_id: str, task_id: str):
         results_path = PROJECT_ROOT / "data" / "results" / f"{video_id}_results.json"
         os.makedirs(results_path.parent, exist_ok=True)
 
-        # 實際分析
-        results = analyzer.analyze_video(video_path, str(results_path))
+        # 實際分析（添加錯誤處理）
+        try:
+            results = analyzer.analyze_video(video_path, str(results_path))
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"❌ 分析錯誤詳情:\n{error_detail}")
+            raise
         
         # 保存結果
         results_file = os.path.join(RESULTS_DIR, f"{video_id}_results.json")

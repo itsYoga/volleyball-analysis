@@ -391,11 +391,11 @@ class VolleyballAnalyzer:
         # 初始化結果
         results = {
             "video_info": {
-                "width": width,
-                "height": height,
-                "fps": fps,
-                "total_frames": total_frames,
-                "duration": total_frames / fps
+                "width": int(width),
+                "height": int(height),
+                "fps": float(fps),
+                "total_frames": int(total_frames),
+                "duration": float(total_frames) / float(fps)
             },
             "player_detection": {
                 "detections": [],  # 每幀的球員偵測彙整
