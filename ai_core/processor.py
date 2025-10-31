@@ -302,25 +302,37 @@ class VolleyballAnalyzer:
         for t in tracked:
             # 預設20*20 bbox，實際可根據模型微調判斷
             est = t.estimate
-            # 確保轉換為 Python 標量（使用 .item() 如果是 NumPy 數組）
+            
+            # 確保轉換為 Python 標量 - 先將整個 est 轉為數組再取元素
             try:
-                est_x = float(est[0].item() if hasattr(est[0], 'item') else est[0])
-                est_y = float(est[1].item() if hasattr(est[1], 'item') else est[1])
-            except (AttributeError, TypeError, IndexError):
                 est_arr = np.asarray(est).flatten()
-                est_x = float(est_arr[0]) if len(est_arr) > 0 else 0.0
-                est_y = float(est_arr[1]) if len(est_arr) > 1 else 0.0
+                if len(est_arr) >= 2:
+                    est_x = float(est_arr[0])
+                    est_y = float(est_arr[1])
+                elif len(est_arr) == 1:
+                    est_x = float(est_arr[0])
+                    est_y = 0.0
+                else:
+                    est_x = est_y = 0.0
+            except (AttributeError, TypeError, ValueError):
+                # 如果轉換失敗，嘗試直接訪問
+                try:
+                    est_x = float(est[0]) if hasattr(est, '__getitem__') else 0.0
+                    est_y = float(est[1]) if hasattr(est, '__getitem__') and len(est) > 1 else 0.0
+                except (IndexError, TypeError, ValueError):
+                    est_x = est_y = 0.0
             
             # 處理 scores - 確保是標量
             try:
                 scores = t.last_detection.scores
                 if isinstance(scores, np.ndarray):
-                    max_score = float(np.max(scores))
+                    scores_flat = scores.flatten()
+                    max_score = float(np.max(scores_flat)) if len(scores_flat) > 0 else 0.0
                 elif hasattr(scores, '__len__') and len(scores) > 0:
                     max_score = float(max(scores))
                 else:
                     max_score = float(scores) if not hasattr(scores, '__len__') else 0.0
-            except (AttributeError, TypeError):
+            except (AttributeError, TypeError, ValueError):
                 max_score = 0.0
             
             output.append({
