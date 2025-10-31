@@ -9,13 +9,14 @@ A modern, professional web application for volleyball video analysis using AI-po
 
 ## ✨ Features
 
-- 🎥 **Video Upload & Processing**: Drag-and-drop video upload with progress tracking
-- ⚽ **Ball Tracking**: Real-time ball trajectory detection using VballNet
-- 🏐 **Action Recognition**: Player action classification (spike, set, receive, serve, block)
+- 🎥 **Video Upload & Processing**: Drag-and-drop video upload with progress tracking (supports up to 2GB)
+- ⚽ **Ball Tracking**: Real-time ball trajectory detection using VballNet ONNX model
+- 🏐 **Action Recognition**: Player action classification (spike, set, receive, serve, block) using YOLOv11
+- 👥 **Player Detection & Tracking**: YOLOv8 + Norfair for player tracking across frames
 - 📊 **Interactive Player**: Click-to-seek timeline with event markers
 - 🔍 **Smart Filtering**: Search and filter videos by status, date, and metadata
 - 📈 **Analytics Dashboard**: Statistics cards and visual insights
-- 🎨 **Modern UI**: Professional, responsive design with smooth animations
+- 🎨 **Modern UI**: Professional, responsive design with Tailwind CSS
 
 ## 🏗️ Project Structure
 
@@ -23,34 +24,37 @@ A modern, professional web application for volleyball video analysis using AI-po
 volleyball_analysis_webapp/
 ├── backend/                 # FastAPI backend service
 │   ├── main.py             # Main API application
-│   └── data/               # Backend data storage
+│   └── data/               # Backend data storage (gitignored)
 │       ├── uploads/        # Uploaded videos
-│       └── results/        # Analysis results
+│       └── results/        # Analysis results JSON
 │
 ├── frontend/               # React + TypeScript frontend
 │   ├── src/
 │   │   ├── components/     # React components
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── VideoUpload.tsx
-│   │   │   ├── VideoLibrary.tsx
-│   │   │   ├── VideoPlayer.tsx
-│   │   │   ├── EventTimeline.tsx
-│   │   │   ├── PlayerHeatmap.tsx
-│   │   │   └── ui/         # Reusable UI components
+│   │   │   ├── Dashboard.tsx      # Main dashboard with statistics
+│   │   │   ├── VideoUpload.tsx    # Drag-and-drop upload interface
+│   │   │   ├── VideoLibrary.tsx   # Video library with search/filter
+│   │   │   ├── VideoPlayer.tsx    # Video player with timeline
+│   │   │   ├── EventTimeline.tsx  # Interactive event timeline
+│   │   │   ├── PlayerHeatmap.tsx  # Player movement heatmap
+│   │   │   └── ui/                # Reusable UI components
 │   │   ├── services/       # API service layer
-│   │   └── index.tsx        # Entry point
+│   │   │   └── api.ts      # Axios-based API client
+│   │   ├── index.tsx       # Entry point
+│   │   ├── App.tsx         # Main app with routing
+│   │   └── index.css       # Tailwind CSS imports
 │   └── public/             # Static assets
 │
 ├── ai_core/                # AI processing core
-│   ├── processor.py        # Main analyzer
-│   └── worker.py           # Background worker
+│   ├── processor.py        # Main analyzer (VolleyballAnalyzer)
+│   └── worker.py           # Celery worker for background processing
 │
-├── models/                 # Pre-trained AI models
+├── models/                 # Pre-trained AI models (gitignored)
 │   ├── action_recognition_yv11m.pt
 │   ├── player_detection_yv8.pt
 │   └── VballNetV1_seq9_grayscale_148_h288_w512.onnx
 │
-├── data/                   # Data storage
+├── data/                   # Data storage (gitignored)
 │   ├── uploads/            # User uploaded videos
 │   └── results/            # Analysis results JSON
 │
@@ -72,7 +76,7 @@ volleyball_analysis_webapp/
 
 - Python 3.11+
 - Node.js 16+
-- Redis (for task queue)
+- Redis (optional, for Celery task queue)
 
 ### Installation
 
@@ -101,6 +105,13 @@ volleyball_analysis_webapp/
    mkdir -p data/uploads data/results backend/data/uploads backend/data/results static
    ```
 
+5. **Place AI models** (required for analysis)
+   - Download or obtain the model files
+   - Place them in the `models/` directory:
+     - `VballNetV1_seq9_grayscale_148_h288_w512.onnx`
+     - `action_recognition_yv11m.pt`
+     - `player_detection_yv8.pt`
+
 ### Running the Application
 
 #### Option 1: Using the start script
@@ -118,7 +129,7 @@ cd backend
 uvicorn main:app --reload
 ```
 
-**Terminal 2 - AI Worker:**
+**Terminal 2 - AI Worker (Optional - if using Celery):**
 ```bash
 source venv/bin/activate
 cd ai_core
@@ -142,8 +153,8 @@ npm start
 ### Backend
 - **FastAPI** - Modern Python web framework
 - **Uvicorn** - ASGI server
-- **Celery** - Async task processing
-- **Redis** - Task queue and caching
+- **Celery** - Async task processing (optional)
+- **Redis** - Task queue and caching (optional)
 
 ### Frontend
 - **React 18** - UI framework
@@ -158,6 +169,7 @@ npm start
 - **Ultralytics** - YOLO models
 - **OpenCV** - Computer vision
 - **ONNX Runtime** - Optimized inference
+- **Norfair** - Multi-object tracking
 
 ## 📖 Usage Guide
 
@@ -174,6 +186,7 @@ npm start
 2. Use search and filters to find specific videos
 3. Click **View Analysis** to open the interactive player
 4. Use the timeline to jump to specific events (spikes, sets, receives)
+5. View player heatmap overlay on the video
 
 ### Dashboard Overview
 
@@ -181,6 +194,55 @@ The dashboard provides:
 - **Statistics Cards**: Total videos, completed, processing, failed
 - **Recent Videos**: Quick access to latest uploads
 - **Status Tracking**: Real-time analysis progress
+
+## 📝 API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|------------|
+| GET | `/` | API root |
+| GET | `/health` | Health check |
+| GET | `/videos` | List all videos |
+| GET | `/videos/{id}` | Get video metadata |
+| POST | `/upload` | Upload video file |
+| POST | `/analyze/{video_id}` | Start analysis |
+| GET | `/analysis/{task_id}` | Get analysis task status |
+| GET | `/results/{video_id}` | Get analysis results |
+| GET | `/play/{video_id}` | Stream video file |
+
+See full interactive API documentation at http://localhost:8000/docs
+
+## 🔄 Data Flow
+
+1. **Upload**: User uploads video → `backend/data/uploads/`
+2. **Process**: AI worker processes video → generates results
+3. **Store**: Results saved to `backend/data/results/` as JSON
+4. **Display**: Frontend fetches and displays results with interactive timeline
+
+## ✅ Feature Status
+
+### Completed Features
+- ✅ Video upload with streaming support
+- ✅ Ball tracking (VballNet)
+- ✅ Action recognition (YOLOv11)
+- ✅ Player detection & tracking (YOLOv8 + Norfair)
+- ✅ Action-to-player association
+- ✅ Score event detection
+- ✅ Game state detection (Play/No-Play)
+- ✅ Interactive timeline with click-to-seek
+- ✅ Player heatmap visualization
+- ✅ Modern responsive UI
+- ✅ Search and filter functionality
+
+### Known Limitations
+
+1. **Database**: Currently uses in-memory storage (`videos_db`), data lost on restart
+   - Future: Integrate PostgreSQL
+
+2. **Task Queue**: Uses FastAPI BackgroundTasks, not persistent
+   - Future: Use Celery + Redis (worker.py already prepared)
+
+3. **Game State**: Simplified logic for Play/No-Play detection
+   - Can be enhanced based on actual requirements
 
 ## 🔧 Development
 
@@ -198,18 +260,31 @@ The dashboard provides:
 - **TypeScript**: Use strict mode, proper typing
 - **React**: Functional components with hooks
 
-## 📝 API Endpoints
+### Building for Production
 
-| Method | Endpoint | Description |
-|--------|----------|------------|
-| GET | `/videos` | List all videos |
-| GET | `/videos/{id}` | Get video metadata |
-| POST | `/upload` | Upload video file |
-| POST | `/videos/{id}/analyze` | Start analysis |
-| GET | `/videos/{id}/results` | Get analysis results |
-| GET | `/static/videos/{id}` | Stream video file |
+```bash
+# Frontend
+cd frontend
+npm run build
 
-See full API documentation at http://localhost:8000/docs
+# Backend
+# Use production ASGI server like gunicorn with uvicorn workers
+```
+
+## 🐳 Docker Deployment
+
+The project includes `docker-compose.yml` for containerized deployment:
+
+```bash
+docker-compose up -d
+```
+
+This will start:
+- Redis service
+- PostgreSQL database
+- Backend API
+- AI Worker
+- Frontend service
 
 ## 🤝 Contributing
 
@@ -221,7 +296,7 @@ See full API documentation at http://localhost:8000/docs
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
 
 ## 🙏 Acknowledgments
 
@@ -231,7 +306,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📞 Support
 
-For issues and questions, please open an issue on GitHub.
+For issues and questions, please open an issue on GitHub: https://github.com/itsYoga/volleyball-analysis
 
 ---
 
