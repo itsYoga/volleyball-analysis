@@ -492,15 +492,15 @@ class VolleyballAnalyzer:
                 if not results["game_states"] or results["game_states"][-1]["state"] != current_state:
                     results["game_states"].append({
                         "state": current_state,
-                        "start_frame": frame_count,
-                        "end_frame": frame_count,  # 將在下次狀態改變時更新
-                        "start_timestamp": frame_count / fps,
-                        "end_timestamp": frame_count / fps
+                        "start_frame": int(frame_count),
+                        "end_frame": int(frame_count),  # 將在下次狀態改變時更新
+                        "start_timestamp": timestamp,
+                        "end_timestamp": timestamp
                     })
                 else:
                     # 更新當前狀態段的結束時間
-                    results["game_states"][-1]["end_frame"] = frame_count
-                    results["game_states"][-1]["end_timestamp"] = frame_count / fps
+                    results["game_states"][-1]["end_frame"] = int(frame_count)
+                    results["game_states"][-1]["end_timestamp"] = timestamp
                 
                 # 進度顯示
                 if frame_count % 100 == 0:
