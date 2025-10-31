@@ -138,8 +138,9 @@ class VolleyballAnalyzer:
                 if boxes is not None:
                     for box in boxes:
                         # 獲取邊界框座標
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        confidence = box.conf[0].cpu().numpy()
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+                        confidence = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy())
                         
                         # 獲取類別名稱
@@ -172,7 +173,8 @@ class VolleyballAnalyzer:
                 boxes = result.boxes
                 if boxes is not None:
                     for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
                         confidence = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy()) if box.cls is not None else 0
                         label = self.player_model.names.get(class_id, "player") if hasattr(self.player_model, 'names') else "player"
@@ -222,11 +224,12 @@ class VolleyballAnalyzer:
                 heatmap = predictions[0] if pred_shape[0] == 1 else predictions
                 if len(heatmap.shape) == 2:
                     # 找到熱力圖中的最大值位置
-                    max_val = np.max(heatmap)
+                    max_val = float(np.max(heatmap))
                     if max_val > 0.3:  # 置信度閾值
                         max_pos = np.unravel_index(np.argmax(heatmap), heatmap.shape)
-                        # 轉換到原始座標
-                        y_norm, x_norm = max_pos[0] / heatmap.shape[0], max_pos[1] / heatmap.shape[1]
+                        # 轉換到原始座標（確保是標量）
+                        y_norm = float(max_pos[0]) / float(heatmap.shape[0])
+                        x_norm = float(max_pos[1]) / float(heatmap.shape[1])
                         x = int(x_norm * orig_w)
                         y = int(y_norm * orig_h)
                         
@@ -238,7 +241,7 @@ class VolleyballAnalyzer:
                             "center": [x, y],
                             "bbox": [max(0, x - w//2), max(0, y - h//2), 
                                     min(orig_w, x + w//2), min(orig_h, y + h//2)],
-                            "confidence": float(max_val)
+                            "confidence": max_val
                         }
             
             # 格式2: (batch, num_detections, features) - 檢測框格式
@@ -249,15 +252,18 @@ class VolleyballAnalyzer:
                     # 找到最高置信度的檢測
                     if batch_preds.shape[1] >= 5:
                         confidences = batch_preds[:, 4] if batch_preds.shape[1] > 4 else batch_preds[:, -1]
-                        max_conf_idx = np.argmax(confidences)
-                        max_confidence = confidences[max_conf_idx]
+                        max_conf_idx = int(np.argmax(confidences))
+                        max_confidence = float(confidences[max_conf_idx])
                         
                         if max_confidence > 0.3:
                             det = batch_preds[max_conf_idx]
                             if len(det) >= 4:
-                                x_norm, y_norm = det[0], det[1]
+                                # 確保轉換為 Python 標量
+                                x_norm = float(det[0])
+                                y_norm = float(det[1])
                                 if len(det) >= 4:
-                                    w_norm, h_norm = det[2], det[3]
+                                    w_norm = float(det[2])
+                                    h_norm = float(det[3])
                                 else:
                                     w_norm = h_norm = 0.02  # 默認大小
                                 
@@ -270,7 +276,7 @@ class VolleyballAnalyzer:
                                     "center": [x, y],
                                     "bbox": [max(0, x - w//2), max(0, y - h//2),
                                             min(orig_w, x + w//2), min(orig_h, y + h//2)],
-                                    "confidence": float(max_confidence)
+                                    "confidence": max_confidence
                                 }
             
             # 如果無法識別格式，返回 None（靜默失敗，不影響其他檢測）
