@@ -39,3 +39,6 @@ test_video/
 *.mov
 *.wmv
 *.flv
+
+# External source folders
+volleyball_analytics-main/
