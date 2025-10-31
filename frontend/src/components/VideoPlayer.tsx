@@ -12,6 +12,8 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   const [status, setStatus] = useState<'idle'|'loading'|'processing'|'completed'|'failed'|'error'>('idle');
   const [error, setError] = useState<string>('');
   const [currentTime, setCurrentTime] = useState<number>(0);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
+  const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -156,6 +158,28 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
         </div>
         
         <div className="p-6">
+          {/* Controls */}
+          <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showBoundingBoxes}
+                onChange={(e) => setShowBoundingBoxes(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Show Bounding Boxes</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showHeatmap}
+                onChange={(e) => setShowHeatmap(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Show Heatmap</span>
+            </label>
+          </div>
+
           <div className="relative w-full bg-black rounded-xl overflow-hidden shadow-2xl">
             <video
               ref={videoRef}
@@ -165,9 +189,28 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
               height={video_info?.height || 360}
               className="w-full h-auto"
             />
-            <div className="absolute left-0 top-0 pointer-events-none w-full h-full">
-              <PlayerHeatmap playerTracks={players_tracking || []} videoSize={{ width: video_info?.width, height: video_info?.height }} />
-            </div>
+            {/* Bounding Boxes Overlay */}
+            {showBoundingBoxes && (
+              <BoundingBoxes
+                playerTracks={players_tracking || []}
+                actions={action_recognition?.actions || []}
+                currentTime={currentTime}
+                fps={fps}
+                videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}
+                showPlayers={true}
+                showActions={true}
+              />
+            )}
+            {/* Heatmap Overlay (optional, less intrusive) */}
+            {showHeatmap && (
+              <div className="absolute left-0 top-0 pointer-events-none w-full h-full">
+                <PlayerHeatmap 
+                  playerTracks={players_tracking || []} 
+                  videoSize={{ width: video_info?.width, height: video_info?.height }} 
+                  enabled={showHeatmap}
+                />
+              </div>
+            )}
           </div>
         </div>
 
