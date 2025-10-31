@@ -327,8 +327,7 @@ class VolleyballAnalyzer:
                 "action_counts": {},
                 "total_actions": 0
             },
-            " Ghost: 球員追蹤數據",
-            "players_tracking": [],
+            "players_tracking": [],  # 球員追蹤數據
             "scores": [],
             "game_states": [],  # 遊戲狀態（Play/No-Play/Timeout等）
             "analysis_time": time.time()
