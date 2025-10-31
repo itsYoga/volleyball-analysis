@@ -3,33 +3,44 @@ import axios from 'axios';
 // API基礎URL
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-// 創建axios實例
+// 創建axios實例 - 不同端點使用不同超時時間
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000, // 30秒超時
+  timeout: 30000, // 30秒超時（適用於一般查詢，即使後端正在處理其他任務）
 });
 
-// 請求攔截器
-api.interceptors.request.use(
-  (config) => {
-    console.log(`API請求: ${config.method?.toUpperCase()} ${config.url}`);
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+// 創建長時間運行的請求實例（用於上傳和分析）
+const longRunningApi = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 300000, // 5分鐘超時（用於長時間操作）
+});
 
-// 響應攔截器
-api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  (error) => {
-    console.error('API錯誤:', error);
-    return Promise.reject(error);
-  }
-);
+// 請求攔截器（應用於兩個實例）
+const requestInterceptor = (config: any) => {
+  console.log(`API請求: ${config.method?.toUpperCase()} ${config.url}`);
+  return config;
+};
+
+const requestErrorInterceptor = (error: any) => {
+  return Promise.reject(error);
+};
+
+// 響應攔截器（應用於兩個實例）
+const responseInterceptor = (response: any) => {
+  return response;
+};
+
+const responseErrorInterceptor = (error: any) => {
+  console.error('API錯誤:', error);
+  return Promise.reject(error);
+};
+
+// 為兩個實例設置攔截器
+api.interceptors.request.use(requestInterceptor, requestErrorInterceptor);
+api.interceptors.response.use(responseInterceptor, responseErrorInterceptor);
+
+longRunningApi.interceptors.request.use(requestInterceptor, requestErrorInterceptor);
+longRunningApi.interceptors.response.use(responseInterceptor, responseErrorInterceptor);
 
 // API接口定義
 export interface Video {
@@ -95,7 +106,7 @@ export const apiService = {
 
   // 上傳影片
   async uploadVideo(file: FormData) {
-    const response = await api.post('/upload', file, {
+    const response = await longRunningApi.post('/upload', file, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

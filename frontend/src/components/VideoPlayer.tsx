@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { getVideoUrl, getAnalysisResults, getVideo } from '../services/api';
 import { EventTimeline } from './EventTimeline';
 import { PlayerHeatmap } from './PlayerHeatmap';
+import { BoundingBoxes } from './BoundingBoxes';
 import { Loader2, AlertCircle, Clock, RefreshCw, ArrowLeft, PlayCircle } from 'lucide-react';
 
 export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
@@ -44,16 +45,40 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   }, [effectiveId]);
 
   const handleSeek = (sec: number) => {
-    if (videoRef.current) videoRef.current.currentTime = sec;
+    if (videoRef.current) {
+      videoRef.current.currentTime = sec;
+      // Force update currentTime immediately
+      setCurrentTime(sec);
+    }
   };
 
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    const onTime = () => setCurrentTime(el.currentTime || 0);
-    el.addEventListener('timeupdate', onTime);
-    return () => el.removeEventListener('timeupdate', onTime);
-  }, []);
+    
+    const onTimeUpdate = () => {
+      const newTime = el.currentTime || 0;
+      setCurrentTime(newTime);
+    };
+    
+    const onSeeked = () => {
+      const newTime = el.currentTime || 0;
+      setCurrentTime(newTime);
+    };
+    
+    // Listen to multiple events to ensure we catch all time changes
+    el.addEventListener('timeupdate', onTimeUpdate);
+    el.addEventListener('seeked', onSeeked);
+    el.addEventListener('play', onTimeUpdate);
+    el.addEventListener('pause', onTimeUpdate);
+    
+    return () => {
+      el.removeEventListener('timeupdate', onTimeUpdate);
+      el.removeEventListener('seeked', onSeeked);
+      el.removeEventListener('play', onTimeUpdate);
+      el.removeEventListener('pause', onTimeUpdate);
+    };
+  }, [result]); // Re-setup when result changes (video loads)
 
   if (status === 'loading') {
     return (
@@ -181,36 +206,42 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
           </div>
 
           <div className="relative w-full bg-black rounded-xl overflow-hidden shadow-2xl">
-            <video
-              ref={videoRef}
-              src={getVideoUrl(effectiveId)}
-              controls
-              width={video_info?.width || 640}
-              height={video_info?.height || 360}
-              className="w-full h-auto"
-            />
-            {/* Bounding Boxes Overlay */}
-            {showBoundingBoxes && (
-              <BoundingBoxes
-                playerTracks={players_tracking || []}
-                actions={action_recognition?.actions || []}
-                currentTime={currentTime}
-                fps={fps}
-                videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}
-                showPlayers={true}
-                showActions={true}
+            <div className="relative w-full" style={{ position: 'relative' }}>
+              <video
+                ref={videoRef}
+                src={getVideoUrl(effectiveId)}
+                controls
+                className="w-full h-auto"
+                style={{ display: 'block' }}
+                onLoadedMetadata={(e) => {
+                  // Update currentTime when video metadata loads
+                  const video = e.target as HTMLVideoElement;
+                  setCurrentTime(video.currentTime || 0);
+                }}
               />
-            )}
-            {/* Heatmap Overlay (optional, less intrusive) */}
-            {showHeatmap && (
-              <div className="absolute left-0 top-0 pointer-events-none w-full h-full">
+              {/* Bounding Boxes Overlay */}
+              {showBoundingBoxes && (
+                <BoundingBoxes
+                  playerTracks={players_tracking || []}
+                  actions={action_recognition?.actions || []}
+                  currentTime={currentTime}
+                  fps={fps}
+                  videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}
+                  showPlayers={true}
+                  showActions={true}
+                />
+              )}
+              {/* Heatmap Overlay (optional, less intrusive) */}
+              {showHeatmap && (
                 <PlayerHeatmap 
                   playerTracks={players_tracking || []} 
-                  videoSize={{ width: video_info?.width, height: video_info?.height }} 
+                  videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }} 
                   enabled={showHeatmap}
+                  currentTime={currentTime}
+                  fps={fps}
                 />
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
 
@@ -227,6 +258,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
               duration={totalFrames}
               currentFrame={currentFrame}
               onSeek={handleSeek}
+              fps={fps}
             />
           </div>
         </div>

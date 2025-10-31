@@ -8,6 +8,7 @@ interface Props {
   duration: number; // total frames
   currentFrame?: number;
   onSeek: (sec: number) => void;
+  fps?: number; // frames per second for time conversion
 }
 
 const getActionIcon = (action?: string) => {
@@ -51,10 +52,56 @@ export const EventTimeline: React.FC<Props> = ({
   gameStates = [], 
   duration, 
   currentFrame = 0, 
-  onSeek 
+  onSeek,
+  fps = 30
 }) => {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = React.useState(false);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Only left mouse button
+    e.preventDefault();
+    setIsDragging(true);
+    handleSeek(e);
+  };
+
+  const handleSeek = React.useCallback((e: React.MouseEvent | MouseEvent) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percentage = Math.max(0, Math.min(1, x / rect.width));
+    const targetFrame = Math.round(percentage * duration);
+    const targetTime = targetFrame / fps;
+    onSeek(targetTime);
+  }, [duration, fps, onSeek]);
+
+  const handleMouseMove = React.useCallback((e: MouseEvent) => {
+    if (!isDragging) return;
+    handleSeek(e);
+  }, [isDragging, handleSeek]);
+
+  const handleMouseUp = React.useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp]);
+
   return (
-    <div className="relative w-full space-y-3">
+    <div 
+      ref={containerRef}
+      className="relative w-full space-y-3"
+      onMouseDown={handleMouseDown}
+      style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+    >
       {/* Scores Track */}
       {scores.length > 0 && (
         <div className="relative w-full h-8">
@@ -65,7 +112,11 @@ export const EventTimeline: React.FC<Props> = ({
                 key={`score-${i}`}
                 style={{ left: `${(e.frame / duration) * 100}%` }}
                 className="absolute top-0 -translate-x-1/2 z-10 group"
-                onClick={() => onSeek(e.timestamp)}
+                onClick={(evt) => {
+                  evt.stopPropagation();
+                  onSeek(e.timestamp);
+                }}
+                onMouseDown={(evt) => evt.stopPropagation()}
                 title={`Score by Player #${e.player_id} @ ${e.timestamp?.toFixed(1)}s`}
               >
                 <div className="bg-gradient-to-br from-yellow-400 to-yellow-600 border-2 border-yellow-700 rounded-full p-1.5 shadow-lg group-hover:scale-110 transition-transform">
@@ -115,7 +166,11 @@ export const EventTimeline: React.FC<Props> = ({
                   key={`act-${i}`}
                   style={{ left: `${position}%` }}
                   className={`absolute top-1 -translate-x-1/2 z-10 border-2 rounded px-2 py-0.5 flex items-center gap-1 shadow-sm hover:shadow-md transition-all ${getActionColor(a.action)}`}
-                  onClick={() => onSeek(a.timestamp)}
+                  onClick={(evt) => {
+                    evt.stopPropagation();
+                    onSeek(a.timestamp);
+                  }}
+                  onMouseDown={(evt) => evt.stopPropagation()}
                   title={`${a.action.charAt(0).toUpperCase() + a.action.slice(1)}${a.player_id ? ` by Player #${a.player_id}` : ''} @ ${a.timestamp?.toFixed(1)}s`}
                 >
                   {getActionIcon(a.action)}

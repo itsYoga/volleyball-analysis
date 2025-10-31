@@ -11,12 +11,16 @@ A modern, professional web application for volleyball video analysis using AI-po
 
 - 🎥 **Video Upload & Processing**: Drag-and-drop video upload with progress tracking (supports up to 2GB)
 - ⚽ **Ball Tracking**: Real-time ball trajectory detection using VballNet ONNX model
-- 🏐 **Action Recognition**: Player action classification (spike, set, receive, serve, block) using YOLOv11
-- 👥 **Player Detection & Tracking**: YOLOv8 + Norfair for player tracking across frames
-- 📊 **Interactive Player**: Click-to-seek timeline with event markers
+- 🏐 **Action Recognition**: Player action classification (spike, set, receive, serve, block) using YOLOv11 with confidence filtering (≥60%)
+- 👥 **Player Detection & Tracking**: YOLOv8 + Norfair for player tracking across frames with confidence filtering (≥50%)
+- 📊 **Interactive Player**: Drag-to-seek timeline with event markers and real-time bounding boxes
+- 🎯 **Smart Confidence Filtering**: Automatic filtering of low-confidence detections to reduce false positives
 - 🔍 **Smart Filtering**: Search and filter videos by status, date, and metadata
 - 📈 **Analytics Dashboard**: Statistics cards and visual insights
 - 🎨 **Modern UI**: Professional, responsive design with Tailwind CSS
+- 🖱️ **Interactive Timeline**: Drag to seek, click event markers to jump to specific moments
+- 📍 **Real-time Bounding Boxes**: Player and action bounding boxes that update with video playback
+- 🔥 **Heatmap Visualization**: Player movement heatmap overlay with time-based filtering
 
 ## 🏗️ Project Structure
 
@@ -185,8 +189,15 @@ npm start
 1. Go to **Library** to see all videos
 2. Use search and filters to find specific videos
 3. Click **View Analysis** to open the interactive player
-4. Use the timeline to jump to specific events (spikes, sets, receives)
-5. View player heatmap overlay on the video
+4. **Timeline Controls**:
+   - Drag the timeline to seek to any position in the video
+   - Click event markers (spikes, sets, receives) to jump to specific moments
+   - Watch the playhead indicator show current playback position
+5. **Visualization Options**:
+   - Toggle **Bounding Boxes** to show/hide player and action detections
+   - Toggle **Heatmap** to visualize player movement patterns
+   - Bounding boxes update in real-time as the video plays
+6. **Confidence Filtering**: Only high-confidence detections (≥50% for players, ≥60% for actions) are displayed
 
 ### Dashboard Overview
 
@@ -223,15 +234,18 @@ See full interactive API documentation at http://localhost:8000/docs
 ### Completed Features
 - ✅ Video upload with streaming support
 - ✅ Ball tracking (VballNet)
-- ✅ Action recognition (YOLOv11)
-- ✅ Player detection & tracking (YOLOv8 + Norfair)
+- ✅ Action recognition (YOLOv11) with confidence filtering
+- ✅ Player detection & tracking (YOLOv8 + Norfair) with confidence filtering
 - ✅ Action-to-player association
 - ✅ Score event detection
 - ✅ Game state detection (Play/No-Play)
-- ✅ Interactive timeline with click-to-seek
-- ✅ Player heatmap visualization
+- ✅ Interactive timeline with drag-to-seek functionality
+- ✅ Real-time bounding boxes synchronized with video playback
+- ✅ Player heatmap visualization with time-based filtering
 - ✅ Modern responsive UI
 - ✅ Search and filter functionality
+- ✅ Non-blocking video analysis (thread pool execution)
+- ✅ Robust error handling and timeout management
 
 ### Known Limitations
 

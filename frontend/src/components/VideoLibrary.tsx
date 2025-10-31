@@ -12,9 +12,31 @@ export const VideoLibrary: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   useEffect(() => {
-    getVideos()
-      .then((res) => setVideos(res.videos || []))
-      .finally(() => setLoading(false));
+    let isMounted = true;
+    const loadVideos = async () => {
+      try {
+        const res = await getVideos();
+        if (isMounted) {
+          setVideos(res.videos || []);
+        }
+      } catch (error: any) {
+        console.error('Failed to load videos:', error);
+        // 如果請求失敗，設為空陣列而不是保持loading狀態
+        if (isMounted) {
+          setVideos([]);
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+    
+    loadVideos();
+    
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const filteredVideos = videos.filter(v => {

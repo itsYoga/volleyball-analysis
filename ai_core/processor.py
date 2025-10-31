@@ -141,6 +141,11 @@ class VolleyballAnalyzer:
                         xyxy = box.xyxy[0].cpu().numpy()
                         x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
                         confidence = float(box.conf[0].cpu().numpy())
+                        
+                        # 只保留置信度 >= 0.6 的動作檢測
+                        if confidence < 0.6:
+                            continue
+                        
                         class_id = int(box.cls[0].cpu().numpy())
                         
                         # 獲取類別名稱
@@ -176,6 +181,11 @@ class VolleyballAnalyzer:
                         xyxy = box.xyxy[0].cpu().numpy()
                         x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
                         confidence = float(box.conf[0].cpu().numpy())
+                        
+                        # 只保留置信度 >= 0.5 的球員檢測
+                        if confidence < 0.5:
+                            continue
+                        
                         class_id = int(box.cls[0].cpu().numpy()) if box.cls is not None else 0
                         label = self.player_model.names.get(class_id, "player") if hasattr(self.player_model, 'names') else "player"
                         players.append({

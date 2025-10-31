@@ -1,13 +1,5 @@
 import React, { useRef, useEffect } from 'react';
 
-interface BoundingBox {
-  bbox: [number, number, number, number];
-  label?: string;
-  confidence?: number;
-  player_id?: number;
-  color?: string;
-}
-
 interface BoundingBoxesProps {
   playerTracks: any[];
   actions: any[];
@@ -60,19 +52,45 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
+    // Ensure canvas size matches video size
+    const canvas = canvasRef.current;
+    if (canvas.width !== videoSize.width || canvas.height !== videoSize.height) {
+      canvas.width = videoSize.width;
+      canvas.height = videoSize.height;
+    }
+
     // Clear canvas
     ctx.clearRect(0, 0, videoSize.width, videoSize.height);
 
     const currentFrame = Math.round(currentTime * fps);
 
     // Draw player bounding boxes
-    if (showPlayers) {
-      const currentTrack = playerTracks.find(
-        (track) => Math.abs(track.frame - currentFrame) <= 1
+    if (showPlayers && playerTracks.length > 0) {
+      // Find the track entry closest to current frame
+      let currentTrack = playerTracks.find(
+        (track) => track.frame === currentFrame
       );
+      
+      // If exact match not found, find closest one within 3 frames
+      if (!currentTrack) {
+        currentTrack = playerTracks.reduce((closest, track) => {
+          if (!closest) return track;
+          const closestDiff = Math.abs(closest.frame - currentFrame);
+          const trackDiff = Math.abs(track.frame - currentFrame);
+          return trackDiff < closestDiff ? track : closest;
+        }, null as any);
+      }
 
-      if (currentTrack?.players) {
-        currentTrack.players.forEach((player: any) => {
+      // Only draw if we found a track within reasonable range (increased to 10 frames for better matching)
+      if (currentTrack && currentTrack.players && Math.abs(currentTrack.frame - currentFrame) <= 10) {
+        // Filter players by confidence threshold (0.5 = 50%)
+        const filteredPlayers = currentTrack.players.filter((player: any) => 
+          player.confidence === undefined || player.confidence >= 0.5
+        );
+        
+        filteredPlayers.forEach((player: any) => {
+          if (!player.bbox || !Array.isArray(player.bbox) || player.bbox.length < 4) return;
+          
           const [x1, y1, x2, y2] = player.bbox;
           const color = getPlayerColor(player.id || 0);
           
@@ -101,12 +119,18 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
     }
 
     // Draw action bounding boxes
-    if (showActions) {
+    if (showActions && actions.length > 0) {
+      // Filter actions within 2 frames of current time and by confidence threshold (0.6 = 60%)
       const currentActions = actions.filter(
-        (action) => Math.abs(action.frame - currentFrame) <= 2
+        (action) => 
+          action.frame !== undefined && 
+          Math.abs(action.frame - currentFrame) <= 2 &&
+          (action.confidence === undefined || action.confidence >= 0.6)
       );
 
       currentActions.forEach((action) => {
+        if (!action.bbox || !Array.isArray(action.bbox) || action.bbox.length < 4) return;
+        
         const [x1, y1, x2, y2] = action.bbox;
         const color = getActionColor(action.action);
         
@@ -141,7 +165,11 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
       width={videoSize.width || 640}
       height={videoSize.height || 360}
       className="absolute left-0 top-0 pointer-events-none"
-      style={{ imageRendering: 'crisp-edges' }}
+      style={{ 
+        imageRendering: 'crisp-edges',
+        width: '100%',
+        height: 'auto'
+      }}
     />
   );
 };

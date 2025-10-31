@@ -208,23 +208,34 @@ async def process_video(video_id: str, task_id: str):
         action_model = str(models_dir / "action_recognition_yv11m.pt")
         player_model = str(models_dir / "player_detection_yv8.pt")
 
-        analyzer = VolleyballAnalyzer(
-            ball_model_path=ball_model if os.path.exists(ball_model) else None,
-            action_model_path=action_model if os.path.exists(action_model) else None,
-            player_model_path=player_model if os.path.exists(player_model) else None,
-            device="cpu"
-        )
-
-        # 執行分析（同步呼叫，簡單以進度條表示）
+        # 更新進度
         analysis_tasks[task_id]["progress"] = 5
-        await asyncio.sleep(0)  # 讓事件循環有機會更新
+        await asyncio.sleep(0)  # 讓事件循環有機會更新，允許其他請求處理
 
         results_path = PROJECT_ROOT / "data" / "results" / f"{video_id}_results.json"
         os.makedirs(results_path.parent, exist_ok=True)
 
-        # 實際分析（添加錯誤處理）
+        # 定義一個內部函數來執行所有阻塞操作（包括分析器初始化和分析）
+        def run_analysis():
+            """在執行緒池中運行的阻塞操作"""
+            analyzer = VolleyballAnalyzer(
+                ball_model_path=ball_model if os.path.exists(ball_model) else None,
+                action_model_path=action_model if os.path.exists(action_model) else None,
+                player_model_path=player_model if os.path.exists(player_model) else None,
+                device="cpu"
+            )
+            return analyzer.analyze_video(video_path, str(results_path))
+
+        # 實際分析（在執行緒池中執行，避免阻塞事件循環）
         try:
-            results = analyzer.analyze_video(video_path, str(results_path))
+            # 使用 run_in_executor 在執行緒池中執行阻塞操作
+            # 這可以確保不會阻塞 FastAPI 的事件循環，讓其他請求（如 /videos）可以正常處理
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+            
+            results = await loop.run_in_executor(None, run_analysis)
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
