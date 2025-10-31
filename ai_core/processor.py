@@ -371,11 +371,20 @@ class VolleyballAnalyzer:
         if not cap.isOpened():
             raise ValueError(f"無法打開影片: {video_path}")
         
-        # 獲取影片信息
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # 獲取影片信息（確保轉換為 Python 標量）
+        fps_raw = cap.get(cv2.CAP_PROP_FPS)
+        fps = float(fps_raw) if not isinstance(fps_raw, (list, tuple, np.ndarray)) else float(fps_raw[0] if len(fps_raw) > 0 else 30.0)
+        if fps <= 0:
+            fps = 30.0  # 默認 FPS
+        
+        total_frames_raw = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        total_frames = int(float(total_frames_raw) if not isinstance(total_frames_raw, (list, tuple, np.ndarray)) else float(total_frames_raw[0] if len(total_frames_raw) > 0 else 0))
+        
+        width_raw = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        width = int(float(width_raw) if not isinstance(width_raw, (list, tuple, np.ndarray)) else float(width_raw[0] if len(width_raw) > 0 else 640))
+        
+        height_raw = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        height = int(float(height_raw) if not isinstance(height_raw, (list, tuple, np.ndarray)) else float(height_raw[0] if len(height_raw) > 0 else 360))
         
         print(f"📊 影片信息: {width}x{height}, {fps:.2f} FPS, {total_frames} 幀")
         
@@ -419,13 +428,17 @@ class VolleyballAnalyzer:
                 
                 frame_count += 1
                 
+                # 確保 fps 是標量（在循環開始時計算一次）
+                fps_scalar = float(fps)
+                timestamp = float(frame_count) / fps_scalar
+                
                 # ----- 球員偵測 + 追蹤 -----
                 players = self.detect_players(frame)
                 tracked_players = self.track_players(players)
                 if tracked_players:
                     results["players_tracking"].append({
-                        "frame": frame_count,
-                        "timestamp": frame_count / fps,
+                        "frame": int(frame_count),
+                        "timestamp": timestamp,
                         "players": tracked_players
                     })
                     results["player_detection"]["total_players_detected"] += len(tracked_players)
@@ -434,8 +447,8 @@ class VolleyballAnalyzer:
                 ball_info = self.detect_ball(frame)
                 if ball_info:
                     results["ball_tracking"]["trajectory"].append({
-                        "frame": frame_count,
-                        "timestamp": frame_count / fps,
+                        "frame": int(frame_count),
+                        "timestamp": timestamp,
                         "center": ball_info["center"],
                         "bbox": ball_info["bbox"],
                         "confidence": ball_info["confidence"]
@@ -447,8 +460,8 @@ class VolleyballAnalyzer:
                 for action in actions:
                     pid = self.assign_action_to_player(action["bbox"], tracked_players)
                     action_data = {
-                        "frame": frame_count,
-                        "timestamp": frame_count / fps,
+                        "frame": int(frame_count),
+                        "timestamp": timestamp,
                         "bbox": action["bbox"],
                         "confidence": action["confidence"],
                         "action": action["action"],
@@ -459,8 +472,8 @@ class VolleyballAnalyzer:
                     if action["action"] in ["score", "spike_score", "attack_score"]:
                         results["scores"].append({
                             "player_id": action_data["player_id"],
-                            "frame": frame_count,
-                            "timestamp": frame_count / fps,
+                            "frame": int(frame_count),
+                            "timestamp": timestamp,
                             "score_type": action["action"]
                         })
                     
