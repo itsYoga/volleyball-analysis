@@ -123,35 +123,6 @@ class VolleyballAnalyzer:
         """
         if self.action_model is None:
             return []
-
-    def detect_players(self, frame: np.ndarray) -> List[Dict]:
-        """
-        偵測球員框 (目標為人/球員)
-        Returns: 每個偵測包含 {bbox, confidence, class_id, label}
-        """
-        if self.player_model is None:
-            return []
-        try:
-            results = self.player_model(frame, verbose=False)
-            players: List[Dict] = []
-            for result in results:
-                boxes = result.boxes
-                if boxes is not None:
-                    for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        confidence = float(box.conf[0].cpu().numpy())
-                        class_id = int(box.cls[0].cpu().numpy()) if box.cls is not None else 0
-                        label = self.player_model.names.get(class_id, "player") if hasattr(self.player_model, 'names') else "player"
-                        players.append({
-                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                            "confidence": confidence,
-                            "class_id": class_id,
-                            "label": label
-                        })
-            return players
-        except Exception as e:
-            print(f"球員偵測錯誤: {e}")
-            return []
         
         try:
             # YOLO模型推理
@@ -185,6 +156,35 @@ class VolleyballAnalyzer:
             
         except Exception as e:
             print(f"動作檢測錯誤: {e}")
+            return []
+
+    def detect_players(self, frame: np.ndarray) -> List[Dict]:
+        """
+        偵測球員框 (目標為人/球員)
+        Returns: 每個偵測包含 {bbox, confidence, class_id, label}
+        """
+        if self.player_model is None:
+            return []
+        try:
+            results = self.player_model(frame, verbose=False)
+            players: List[Dict] = []
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        confidence = float(box.conf[0].cpu().numpy())
+                        class_id = int(box.cls[0].cpu().numpy()) if box.cls is not None else 0
+                        label = self.player_model.names.get(class_id, "player") if hasattr(self.player_model, 'names') else "player"
+                        players.append({
+                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                            "confidence": confidence,
+                            "class_id": class_id,
+                            "label": label
+                        })
+            return players
+        except Exception as e:
+            print(f"球員偵測錯誤: {e}")
             return []
     
     def preprocess_ball_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -327,8 +327,10 @@ class VolleyballAnalyzer:
                 "action_counts": {},
                 "total_actions": 0
             },
+            " Ghost: 球員追蹤數據",
             "players_tracking": [],
             "scores": [],
+            "game_states": [],  # 遊戲狀態（Play/No-Play/Timeout等）
             "analysis_time": time.time()
         }
         
@@ -393,6 +395,25 @@ class VolleyballAnalyzer:
                     if action_name not in results["action_recognition"]["action_counts"]:
                         results["action_recognition"]["action_counts"][action_name] = 0
                     results["action_recognition"]["action_counts"][action_name] += 1
+                
+                # ----- 簡單的遊戲狀態判斷：有動作時為Play，否則為No-Play -----
+                # 這是一個簡化實現，實際可以根據動作類型、球位置等更精確判斷
+                has_action = len(actions) > 0 or ball_info is not None
+                current_state = "Play" if has_action else "No-Play"
+                
+                # 更新遊戲狀態（簡單邏輯：如果狀態改變，記錄新狀態段）
+                if not results["game_states"] or results["game_states"][-1]["state"] != current_state:
+                    results["game_states"].append({
+                        "state": current_state,
+                        "start_frame": frame_count,
+                        "end_frame": frame_count,  # 將在下次狀態改變時更新
+                        "start_timestamp": frame_count / fps,
+                        "end_timestamp": frame_count / fps
+                    })
+                else:
+                    # 更新當前狀態段的結束時間
+                    results["game_states"][-1]["end_frame"] = frame_count
+                    results["game_states"][-1]["end_timestamp"] = frame_count / fps
                 
                 # 進度顯示
                 if frame_count % 100 == 0:
