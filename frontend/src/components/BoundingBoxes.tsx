@@ -91,12 +91,8 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
 
       // Only draw if we found a track within reasonable range (increased to 15 frames for better matching)
       if (currentTrack && currentTrack.players && Math.abs(currentTrack.frame - currentFrame) <= 15) {
-        // Filter players by confidence threshold (0.5 = 50%)
-        const filteredPlayers = currentTrack.players.filter((player: any) => 
-          player.confidence === undefined || player.confidence >= 0.5
-        );
-        
-        filteredPlayers.forEach((player: any) => {
+        // 移除置信度過濾，顯示所有檢測到的球員（因為後端已經處理了）
+        currentTrack.players.forEach((player: any) => {
           if (!player.bbox || !Array.isArray(player.bbox) || player.bbox.length < 4) return;
           
           const [x1, y1, x2, y2] = player.bbox;
@@ -128,13 +124,11 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
 
     // Draw action bounding boxes
     if (showActions && actions.length > 0) {
-      // Filter actions within 10 frames of current time (increased from 2 for better visibility)
-      // and by confidence threshold (0.6 = 60%)
+      // 顯示當前幀的動作檢測（每一幀都顯示）
       const currentActions = actions.filter(
         (action) => 
           action.frame !== undefined && 
-          Math.abs(action.frame - currentFrame) <= 10 &&
-          (action.confidence === undefined || action.confidence >= 0.6)
+          action.frame === currentFrame  // 只顯示當前幀的動作檢測
       );
 
       currentActions.forEach((action) => {

@@ -31,3 +31,4 @@ pandas>=2.2.0
 pydantic==1.10.8
 httpx==0.24.1
 aiofiles==23.1.0
+norfair>=2.0.0

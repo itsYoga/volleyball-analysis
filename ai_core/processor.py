@@ -52,49 +52,13 @@ class VolleyballAnalyzer:
         if player_model_path and os.path.exists(player_model_path):
             self.load_player_model(player_model_path)
         
-        # 改進追蹤器配置：使用 IOU 距離函數以更好地處理重疊情況
-        # 自定義 IOU 距離函數（在初始化時定義，因為需要在 Tracker 中使用）
-        def iou_distance(detection, tracked_object):
-            """計算 IOU 距離（越小越好，1.0 - IOU）"""
-            # 獲取檢測框
-            if hasattr(detection, 'data') and detection.data and 'bbox' in detection.data:
-                det_bbox = detection.data['bbox']
-            else:
-                # 如果沒有 bbox，從中心點創建假設的 bbox
-                det_points = detection.points
-                cx = float(det_points[0])
-                cy = float(det_points[1]) if len(det_points) > 1 else float(det_points[0])
-                det_bbox = [cx - 25, cy - 50, cx + 25, cy + 50]
-            
-            # 獲取追蹤對象的 bbox
-            if hasattr(tracked_object, 'last_detection') and tracked_object.last_detection:
-                if hasattr(tracked_object.last_detection, 'data') and tracked_object.last_detection.data and 'bbox' in tracked_object.last_detection.data:
-                    tracked_bbox = tracked_object.last_detection.data['bbox']
-                else:
-                    # 從估計位置創建 bbox
-                    tracked_points = tracked_object.estimate
-                    tx = float(tracked_points[0])
-                    ty = float(tracked_points[1]) if len(tracked_points) > 1 else float(tracked_points[0])
-                    tracked_bbox = [tx - 25, ty - 50, tx + 25, ty + 50]
-            else:
-                # 從估計位置創建 bbox
-                tracked_points = tracked_object.estimate
-                tx = float(tracked_points[0])
-                ty = float(tracked_points[1]) if len(tracked_points) > 1 else float(tracked_points[0])
-                tracked_bbox = [tx - 25, ty - 50, tx + 25, ty + 50]
-            
-            # 計算 IOU
-            iou = self._iou(det_bbox, tracked_bbox)
-            # 返回距離（1.0 - IOU），IOU 越大距離越小
-            return 1.0 - iou
-        
-        # 使用改進的追蹤器：使用 IOU 距離函數，增加 hit_counter 以處理暫時丟失
+        # 新增追蹤器實例 - 使用 bbox 模式（類似 volleyball_analytics-main）
+        # 雖然使用 bbox 兩個點，但 distance_function 仍使用 "euclidean"（與 volleyball_analytics-main 一致）
         self.tracker = norfair.Tracker(
-            distance_function=iou_distance,
-            distance_threshold=0.5,  # IOU 閾值（1.0 - 0.5 = 0.5 IOU 最低要求）
-            initialization_delay=2,  # 減少初始化延遲
-            hit_counter_max=15,      # 增加 hit_counter 以處理暫時丟失（快速移動或重疊）
-            past_detections_length=5  # 保留過去5幀的檢測用於預測
+            distance_function="euclidean",  # 使用 euclidean 距離函數（與 volleyball_analytics-main 一致）
+            distance_threshold=50,  # euclidean 距離閾值（像素）
+            initialization_delay=1,
+            hit_counter_max=10
         )
     
     def load_ball_model(self, model_path: str):
@@ -160,11 +124,17 @@ class VolleyballAnalyzer:
                 
                 # 模型推理
                 input_name = self.ball_model.get_inputs()[0].name
-                output = self.ball_model.run(None, {input_name: input_tensor})[0]
+                output_raw = self.ball_model.run(None, {input_name: input_tensor})
+                
+                # 確保 output 是列表格式
+                if not isinstance(output_raw, list):
+                    output = [output_raw]
+                else:
+                    output = output_raw
                 
                 # 後處理結果（使用最後一個時間步的結果）
                 ball_info = self.postprocess_ball_output(output, frame.shape)
-                if ball_info and ball_info.get('confidence', 0) > 0.3:
+                if ball_info and ball_info.get('confidence', 0) > 0.2:  # 降低閾值到0.2
                     return ball_info
             except Exception as e:
                 # 如果ONNX模型失敗，嘗試YOLO
@@ -265,7 +235,8 @@ class VolleyballAnalyzer:
         if self.player_model is None:
             return []
         try:
-            results = self.player_model(frame, verbose=False)
+            # 只檢測類別 0（person）以提高效率和準確性
+            results = self.player_model(frame, verbose=False, classes=[0])
             players: List[Dict] = []
             for result in results:
                 boxes = result.boxes
@@ -281,6 +252,11 @@ class VolleyballAnalyzer:
                         
                         class_id = int(box.cls[0].cpu().numpy()) if box.cls is not None else 0
                         label = self.player_model.names.get(class_id, "player") if hasattr(self.player_model, 'names') else "player"
+                        
+                        # 只保留類別 0（person）的檢測結果
+                        if class_id != 0:
+                            continue
+                        
                         players.append({
                             "bbox": [float(x1), float(y1), float(x2), float(y2)],
                             "confidence": confidence,
@@ -290,6 +266,8 @@ class VolleyballAnalyzer:
             return players
         except Exception as e:
             print(f"球員偵測錯誤: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def preprocess_ball_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -317,7 +295,13 @@ class VolleyballAnalyzer:
         """
         try:
             # VballNet 輸出格式檢查
-            predictions = output[0] if output else None
+            # output 是一個列表，output[0] 是 numpy 數組
+            if not output or len(output) == 0:
+                return None
+                
+            predictions = output[0]  # 獲取第一個輸出（numpy 數組）
+            
+            # 檢查 predictions 是否為 None（使用 isinstance 檢查）
             if predictions is None:
                 return None
             
@@ -330,8 +314,8 @@ class VolleyballAnalyzer:
                 # 使用最後一個時間步的熱力圖（索引8）
                 heatmap = predictions[0, -1, :, :]  # (288, 512)
                 
-                # 應用閾值（根據原始項目使用0.5）
-                threshold = 0.5
+                # 應用閾值（降低閾值以提高檢測率，因為熱力圖最大值約0.08-0.10）
+                threshold = 0.3  # 從0.5降低到0.3，因為實際熱力圖值較低
                 _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
                 
                 # 尋找輪廓
@@ -390,47 +374,49 @@ class VolleyballAnalyzer:
             return None
     
     def track_players(self, players):
-        # players = [{bbox:..., confidence:...}]
+        """
+        追蹤球員 - 使用 bbox 模式（類似 volleyball_analytics-main）
+        players = [{bbox:..., confidence:...}]
+        
+        使用 bbox 的兩個點（左上角和右下角）來創建 norfair Detection
+        這樣可以使用 IOU 距離函數來追蹤，更準確地保留 bbox 信息
+        """
+        if not players:
+            return []
+        
         norfair_dets = []
-        for d in players:
+        
+        for idx, d in enumerate(players):
             # 確保座標是 Python 標量
             bbox = d['bbox']
-            cx = (float(bbox[0]) + float(bbox[2])) / 2.0
-            cy = (float(bbox[1]) + float(bbox[3])) / 2.0
+            x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
             conf = float(d['confidence'])
             
-            # 創建檢測對象並附加 bbox 信息用於 IOU 計算
-            detection = norfair.Detection(
-                points=np.array([cx, cy]), 
-                scores=np.array([conf]),
-                data={'bbox': bbox}  # 附加 bbox 信息
+            # 使用 bbox 的兩個點（左上角和右下角）來創建 Detection
+            # 類似 volleyball_analytics-main 的 convert_to_norfair_detection (bbox 模式)
+            box_points = np.array([
+                [x1, y1],  # 左上角
+                [x2, y2]   # 右下角
+            ])
+            scores = np.array([conf, conf])  # 兩個點都使用相同的置信度
+            
+            det = norfair.Detection(
+                points=box_points,
+                scores=scores,
+                label="player"
             )
-            norfair_dets.append(detection)
+            # 將原始檢測信息存儲在檢測對象中（使用自定義屬性）
+            det._original_bbox = bbox
+            det._original_confidence = conf
+            det._original_idx = idx
+            
+            norfair_dets.append(det)
         
         tracked = self.tracker.update(norfair_dets)
         output = []
+        
         for t in tracked:
-            # 預設20*20 bbox，實際可根據模型微調判斷
-            est = t.estimate
-            
-            # 確保轉換為 Python 標量 - 先將整個 est 轉為數組再取元素
-            try:
-                est_arr = np.asarray(est).flatten()
-                if len(est_arr) >= 2:
-                    est_x = float(est_arr[0])
-                    est_y = float(est_arr[1])
-                elif len(est_arr) == 1:
-                    est_x = float(est_arr[0])
-                    est_y = 0.0
-                else:
-                    est_x = est_y = 0.0
-            except (AttributeError, TypeError, ValueError):
-                # 如果轉換失敗，嘗試直接訪問
-                try:
-                    est_x = float(est[0]) if hasattr(est, '__getitem__') else 0.0
-                    est_y = float(est[1]) if hasattr(est, '__getitem__') and len(est) > 1 else 0.0
-                except (IndexError, TypeError, ValueError):
-                    est_x = est_y = 0.0
+            est = t.estimate  # estimate 應該是 bbox 的兩個點 [[x1, y1], [x2, y2]]
             
             # 處理 scores - 確保是標量
             try:
@@ -445,20 +431,127 @@ class VolleyballAnalyzer:
             except (AttributeError, TypeError, ValueError):
                 max_score = 0.0
             
-            # 從 last_detection 獲取 bbox（如果可用）
-            bbox = None
-            if hasattr(t, 'last_detection') and hasattr(t.last_detection, 'data') and 'bbox' in t.last_detection.data:
-                bbox = t.last_detection.data['bbox']
+            # 優先使用原始檢測的 bbox
+            bbox_to_use = None
+            conf_to_use = max_score
+            
+            # 嘗試從 last_detection 獲取原始 bbox
+            if hasattr(t, 'last_detection') and hasattr(t.last_detection, '_original_bbox'):
+                bbox_to_use = t.last_detection._original_bbox
+                conf_to_use = getattr(t.last_detection, '_original_confidence', max_score)
+            
+            # 如果沒有原始 bbox，嘗試從 estimate 中提取（bbox 模式）
+            if bbox_to_use is None:
+                try:
+                    est_arr = np.asarray(est)
+                    if est_arr.shape == (2, 2):  # [[x1, y1], [x2, y2]]
+                        x1 = float(est_arr[0, 0])
+                        y1 = float(est_arr[0, 1])
+                        x2 = float(est_arr[1, 0])
+                        y2 = float(est_arr[1, 1])
+                        bbox_to_use = [x1, y1, x2, y2]
+                    elif est_arr.shape == (2,) or len(est_arr.flatten()) == 2:
+                        # 如果只有兩個點，可能是中心點模式（不應該發生，但處理一下）
+                        est_flat = est_arr.flatten()
+                        cx = float(est_flat[0])
+                        cy = float(est_flat[1])
+                        # 使用默認大小
+                        default_width = 80
+                        default_height = 160
+                        bbox_to_use = [
+                            cx - default_width / 2,
+                            cy - default_height / 2,
+                            cx + default_width / 2,
+                            cy + default_height / 2
+                        ]
+                except (AttributeError, TypeError, ValueError, IndexError):
+                    pass
+            
+            # 如果仍然沒有找到，嘗試從當前幀的檢測中找到最接近的
+            if bbox_to_use is None and players:
+                # 找到最接近追蹤 bbox 的原始檢測
+                min_iou = 0.0
+                closest_player = None
+                
+                # 從 estimate 提取中心點來匹配
+                est_arr = None
+                try:
+                    est_arr = np.asarray(est)
+                    if est_arr.shape == (2, 2):
+                        est_cx = (float(est_arr[0, 0]) + float(est_arr[1, 0])) / 2.0
+                        est_cy = (float(est_arr[0, 1]) + float(est_arr[1, 1])) / 2.0
+                    else:
+                        est_flat = est_arr.flatten()
+                        est_cx = float(est_flat[0])
+                        est_cy = float(est_flat[1]) if len(est_flat) > 1 else 0.0
+                except:
+                    est_cx = est_cy = 0.0
+                
+                for p in players:
+                    p_bbox = p['bbox']
+                    p_cx = (float(p_bbox[0]) + float(p_bbox[2])) / 2.0
+                    p_cy = (float(p_bbox[1]) + float(p_bbox[3])) / 2.0
+                    dist = ((est_cx - p_cx)**2 + (est_cy - p_cy)**2)**0.5
+                    
+                    # 使用 IOU 來匹配
+                    if est_arr is not None and est_arr.shape == (2, 2):
+                        est_bbox = [float(est_arr[0, 0]), float(est_arr[0, 1]), float(est_arr[1, 0]), float(est_arr[1, 1])]
+                        iou = self._iou(est_bbox, p_bbox)
+                        if iou > min_iou:
+                            min_iou = iou
+                            closest_player = p
+                    elif dist < 100:  # 100像素閾值
+                        if closest_player is None or dist < min_iou:
+                            min_iou = dist
+                            closest_player = p
+                
+                if closest_player and min_iou > 0.1:  # IOU 閾值或距離閾值
+                    bbox_to_use = closest_player['bbox']
+                    conf_to_use = closest_player['confidence']
+            
+            # 如果仍然沒有找到，使用默認大小
+            if bbox_to_use is None:
+                try:
+                    est_arr = np.asarray(est)
+                    if est_arr.shape == (2, 2):
+                        x1 = float(est_arr[0, 0])
+                        y1 = float(est_arr[0, 1])
+                        x2 = float(est_arr[1, 0])
+                        y2 = float(est_arr[1, 1])
+                        bbox_to_use = [x1, y1, x2, y2]
+                    else:
+                        est_flat = est_arr.flatten()
+                        cx = float(est_flat[0])
+                        cy = float(est_flat[1]) if len(est_flat) > 1 else 0.0
+                        default_width = 80
+                        default_height = 160
+                        bbox_to_use = [
+                            cx - default_width / 2,
+                            cy - default_height / 2,
+                            cx + default_width / 2,
+                            cy + default_height / 2
+                        ]
+                except:
+                    # 最後的備選方案
+                    bbox_to_use = [0.0, 0.0, 80.0, 160.0]
+            
+            # 確保 bbox 格式正確
+            if isinstance(bbox_to_use, list) and len(bbox_to_use) >= 4:
+                final_bbox = [
+                    float(bbox_to_use[0]),
+                    float(bbox_to_use[1]),
+                    float(bbox_to_use[2]),
+                    float(bbox_to_use[3])
+                ]
             else:
-                # 如果沒有 bbox，使用估計位置創建一個默認大小的 bbox
-                w, h = 50, 100  # 默認寬高
-                bbox = [est_x - w/2, est_y - h/2, est_x + w/2, est_y + h/2]
+                final_bbox = [0.0, 0.0, 80.0, 160.0]
             
             output.append({
                 'id': int(t.id),
-                'bbox': bbox,
-                'confidence': max_score
+                'bbox': final_bbox,
+                'confidence': conf_to_use
             })
+        
         return output
 
     def _iou(self, boxA, boxB):
@@ -512,8 +605,53 @@ class VolleyballAnalyzer:
                 min_distance = distance
                 closest_player_id = p['id']
         
+        # 返回最接近的球員ID（如果找到）
         return closest_player_id
-
+    
+    def _filter_ball_trajectory(self, trajectory: List[Dict]) -> List[Dict]:
+        """
+        過濾球追蹤誤檢測，移除不在連續軌跡上的點
+        使用速度閾值和距離閾值來判斷是否為誤檢測
+        """
+        if len(trajectory) <= 2:
+            return trajectory
+        
+        filtered = [trajectory[0]]  # 保留第一個點
+        
+        for i in range(1, len(trajectory)):
+            prev_point = trajectory[i - 1]
+            curr_point = trajectory[i]
+            
+            # 計算時間差（秒）
+            time_diff = curr_point.get("timestamp", 0) - prev_point.get("timestamp", 0)
+            if time_diff <= 0:
+                # 如果時間差為0或負數，跳過（可能是同一幀）
+                continue
+            
+            # 計算距離（像素）
+            prev_center = prev_point.get("center", [0, 0])
+            curr_center = curr_point.get("center", [0, 0])
+            distance = ((curr_center[0] - prev_center[0])**2 + (curr_center[1] - prev_center[1])**2)**0.5
+            
+            # 計算速度（像素/秒）
+            velocity = distance / time_diff if time_diff > 0 else float('inf')
+            
+            # 過濾條件：
+            # 1. 速度不能太快（假設球的最大速度約為 1000 像素/秒）
+            # 2. 距離不能太遠（假設相鄰兩幀最大距離約為 200 像素）
+            # 3. 置信度不能太低（< 0.2）
+            max_velocity = 1000.0  # 像素/秒
+            max_distance = 200.0  # 像素
+            min_confidence = 0.2
+            
+            if (velocity <= max_velocity and 
+                distance <= max_distance and 
+                curr_point.get("confidence", 0) >= min_confidence):
+                filtered.append(curr_point)
+            # 如果不符合條件，跳過這個點（視為誤檢測）
+        
+        return filtered
+    
     def analyze_video(self, video_path: str, output_path: str = None, progress_callback=None) -> dict:
         """
         分析整個影片
@@ -568,7 +706,8 @@ class VolleyballAnalyzer:
                 "total_frames": total_frames
             },
             "action_recognition": {
-                "actions": [],
+                "actions": [],  # 合併後的動作（用於時間軸和統計）
+                "action_detections": [],  # 每一幀的動作檢測（用於動態顯示框）
                 "action_counts": {},
                 "total_actions": 0
             },
@@ -679,9 +818,21 @@ class VolleyballAnalyzer:
                 actions = self.detect_actions(frame)
                 detected_action_keys = set()
                 
+                # 保存每一幀的動作檢測結果（用於動態顯示框）
                 for action in actions:
                     pid = self.assign_action_to_player(action["bbox"], tracked_players)
                     player_id = int(pid) if pid is not None else None
+                    
+                    # 將每一幀的檢測結果保存到 action_detections
+                    results["action_recognition"]["action_detections"].append({
+                        "frame": int(frame_count),
+                        "timestamp": timestamp,
+                        "bbox": action["bbox"],
+                        "confidence": action["confidence"],
+                        "action": action["action"],
+                        "player_id": player_id
+                    })
+                    
                     action_type = action["action"]
                     key = (player_id, action_type)
                     detected_action_keys.add(key)
@@ -759,6 +910,12 @@ class VolleyballAnalyzer:
         
         finally:
             cap.release()
+        
+        # 過濾球追蹤誤檢測（移除不在連續軌跡上的點）
+        if len(results["ball_tracking"]["trajectory"]) > 0:
+            filtered_trajectory = self._filter_ball_trajectory(results["ball_tracking"]["trajectory"])
+            results["ball_tracking"]["trajectory"] = filtered_trajectory
+            results["ball_tracking"]["detected_frames"] = len(filtered_trajectory)
         
         # 完成統計
         results["action_recognition"]["total_actions"] = len(results["action_recognition"]["actions"])

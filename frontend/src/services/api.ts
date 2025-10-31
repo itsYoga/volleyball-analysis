@@ -86,9 +86,21 @@ export interface AnalysisResults {
     actions: Array<{
       frame: number;
       timestamp: number;
+      end_frame?: number;
+      end_timestamp?: number;
       bbox: [number, number, number, number];
       confidence: number;
       action: string;
+      player_id?: number;
+      duration?: number;
+    }>;
+    action_detections: Array<{
+      frame: number;
+      timestamp: number;
+      bbox: [number, number, number, number];
+      confidence: number;
+      action: string;
+      player_id?: number;
     }>;
     action_counts: Record<string, number>;
     total_actions: number;

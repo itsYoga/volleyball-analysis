@@ -9,10 +9,12 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
-from processor import VolleyballAnalyzer
 
-# 添加項目根目錄到路徑
+# 添加項目根目錄到路徑（必須在導入之前）
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent))  # 也添加 ai_core 目錄
+
+from processor import VolleyballAnalyzer
 
 # Celery配置
 app = Celery('volleyball_analyzer')
@@ -41,6 +43,7 @@ def get_analyzer():
         analyzer = VolleyballAnalyzer(
             ball_model_path=BALL_MODEL_PATH,
             action_model_path=ACTION_MODEL_PATH,
+            player_model_path=None,  # 如果需要球員檢測，添加 PLAYER_MODEL_PATH
             device=DEVICE
         )
     return analyzer

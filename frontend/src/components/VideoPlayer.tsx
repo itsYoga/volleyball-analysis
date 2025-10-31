@@ -468,7 +468,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
               {(showPlayerBoxes || showActionBoxes) && (
                 <BoundingBoxes
                   playerTracks={players_tracking || []}
-                  actions={action_recognition?.actions || []}
+                  actions={action_recognition?.action_detections || []}  // 使用 action_detections 來顯示每一幀的動態框
                   currentTime={currentTime}
                   fps={fps}
                   videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}

@@ -70,16 +70,16 @@ test_video/
 # ============================================
 # Models & Large Files
 # ============================================
-# AI model files (too large for Git)
-models/*.pt
-models/*.pth
-models/*.onnx
-models/*.bin
-models/*.h5
-models/*.pb
-models/*.tflite
-models/checkpoints/
-models/weights/
+# AI model files - 現在允許上傳到 Git
+# models/*.pt      # 已移除，允許上傳模型文件
+# models/*.pth     # 已移除，允許上傳模型文件
+# models/*.onnx    # 已移除，允許上傳模型文件
+# models/*.bin     # 已移除，允許上傳模型文件
+# models/*.h5      # 已移除，允許上傳模型文件
+# models/*.pb      # 已移除，允許上傳模型文件
+# models/*.tflite  # 已移除，允許上傳模型文件
+models/checkpoints/  # 仍然排除檢查點文件夾
+models/weights/      # 仍然排除權重文件夾
 
 # ============================================
 # IDE & Editor

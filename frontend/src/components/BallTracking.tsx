@@ -80,29 +80,63 @@ export const BallTracking: React.FC<BallTrackingProps> = ({
       return;
     }
     
-    // Draw trajectory path
-    ctx.strokeStyle = '#FFD700'; // Gold color for ball trail
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    
-    // Draw the path
-    ctx.beginPath();
-    relevantPositions.forEach((pos: any, index: number) => {
-      const center = pos.center || [0, 0];
-      const x = center[0] || 0;
-      const y = center[1] || 0;
-      
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
+    // Filter ball positions and remove outliers based on trajectory continuity
+    // Sort by frame/timestamp to ensure correct order
+    const sortedPositions = relevantPositions.sort((a: any, b: any) => {
+      const frameA = a.frame || (a.timestamp || 0) * fps;
+      const frameB = b.frame || (b.timestamp || 0) * fps;
+      return frameA - frameB;
     });
-    ctx.stroke();
     
-    // Draw ball positions as circles with fading opacity
-    relevantPositions.forEach((pos: any, index: number) => {
+    // Filter outliers: remove points that are too far from the trajectory
+    const filteredPositions: any[] = [];
+    if (sortedPositions.length > 0) {
+      filteredPositions.push(sortedPositions[0]); // Always keep first point
+      
+      for (let i = 1; i < sortedPositions.length; i++) {
+        const prev = sortedPositions[i - 1];
+        const curr = sortedPositions[i];
+        
+        const prevCenter = prev.center || [0, 0];
+        const currCenter = curr.center || [0, 0];
+        
+        // Calculate distance between consecutive points
+        const distance = Math.sqrt(
+          Math.pow(currCenter[0] - prevCenter[0], 2) + 
+          Math.pow(currCenter[1] - prevCenter[1], 2)
+        );
+        
+        // Calculate time difference
+        const prevTime = prev.timestamp || (prev.frame || 0) / fps;
+        const currTime = curr.timestamp || (curr.frame || 0) / fps;
+        const timeDiff = Math.abs(currTime - prevTime);
+        
+        // Calculate velocity (pixels per second)
+        const velocity = timeDiff > 0 ? distance / timeDiff : Infinity;
+        
+        // Filter conditions:
+        // 1. Distance should be reasonable (max 200 pixels per frame)
+        // 2. Velocity should be reasonable (max 1000 pixels/second)
+        // 3. Confidence should be reasonable (>= 0.2)
+        const maxDistance = 200.0;
+        const maxVelocity = 1000.0;
+        const minConfidence = 0.2;
+        
+        if (distance <= maxDistance && 
+            velocity <= maxVelocity && 
+            (curr.confidence || 0) >= minConfidence) {
+          filteredPositions.push(curr);
+        }
+        // Otherwise skip this point (outlier)
+      }
+    }
+    
+    if (filteredPositions.length === 0) {
+      return;
+    }
+    
+    // Draw ball positions as circles with fading opacity (NO CONNECTING LINES)
+    filteredPositions.forEach((pos: any, index: number) => {
       const center = pos.center || [0, 0];
       const x = center[0] || 0;
       const y = center[1] || 0;
@@ -125,7 +159,7 @@ export const BallTracking: React.FC<BallTrackingProps> = ({
       ctx.stroke();
       
       // Draw current ball position with highlight
-      if (index === relevantPositions.length - 1) {
+      if (index === filteredPositions.length - 1) {
         // Current position - draw larger circle
         ctx.fillStyle = '#FFD700';
         ctx.beginPath();
