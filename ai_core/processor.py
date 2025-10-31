@@ -204,36 +204,81 @@ class VolleyballAnalyzer:
         return input_tensor
     
     def postprocess_ball_output(self, output: List, frame_shape: Tuple) -> Optional[Dict]:
-        """後處理球檢測輸出"""
+        """後處理球檢測輸出 - VballNet 模型輸出格式處理"""
         try:
-            # 這裡需要根據您的具體模型輸出格式調整
-            # 假設輸出包含球的位置和置信度
-            predictions = output[0]  # 假設第一個輸出是預測結果
+            # VballNet 輸出格式檢查
+            predictions = output[0] if output else None
+            if predictions is None:
+                return None
             
-            # 找到最高置信度的檢測
-            max_conf_idx = np.argmax(predictions[0, :, 4])  # 假設第5列是置信度
-            max_confidence = predictions[0, max_conf_idx, 4]
+            # 檢查輸出形狀
+            pred_shape = predictions.shape
+            orig_h, orig_w = frame_shape[:2]
             
-            if max_confidence > 0.5:  # 置信度閾值
-                x, y, w, h = predictions[0, max_conf_idx, :4]
-                
-                # 轉換回原始幀座標
-                orig_h, orig_w = frame_shape[:2]
-                x = int(x * orig_w)
-                y = int(y * orig_h)
-                w = int(w * orig_w)
-                h = int(h * orig_h)
-                
-                return {
-                    "center": [x, y],
-                    "bbox": [x - w//2, y - h//2, x + w//2, y + h//2],
-                    "confidence": float(max_confidence)
-                }
+            # VballNet 可能輸出多種格式，嘗試常見格式
+            # 格式1: (batch, height, width) - 熱力圖格式
+            if len(pred_shape) == 3:
+                # 形狀: (1, H, W) 或 (batch, H, W)
+                heatmap = predictions[0] if pred_shape[0] == 1 else predictions
+                if len(heatmap.shape) == 2:
+                    # 找到熱力圖中的最大值位置
+                    max_val = np.max(heatmap)
+                    if max_val > 0.3:  # 置信度閾值
+                        max_pos = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+                        # 轉換到原始座標
+                        y_norm, x_norm = max_pos[0] / heatmap.shape[0], max_pos[1] / heatmap.shape[1]
+                        x = int(x_norm * orig_w)
+                        y = int(y_norm * orig_h)
+                        
+                        # 估算球的大小（假設為固定比例）
+                        ball_size = min(orig_w, orig_h) * 0.02  # 約2%的畫面大小
+                        w = h = int(ball_size)
+                        
+                        return {
+                            "center": [x, y],
+                            "bbox": [max(0, x - w//2), max(0, y - h//2), 
+                                    min(orig_w, x + w//2), min(orig_h, y + h//2)],
+                            "confidence": float(max_val)
+                        }
             
+            # 格式2: (batch, num_detections, features) - 檢測框格式
+            elif len(pred_shape) == 3 and pred_shape[2] >= 5:
+                # 嘗試找到有效檢測
+                batch_preds = predictions[0] if pred_shape[0] == 1 else predictions
+                if len(batch_preds.shape) == 2:
+                    # 找到最高置信度的檢測
+                    if batch_preds.shape[1] >= 5:
+                        confidences = batch_preds[:, 4] if batch_preds.shape[1] > 4 else batch_preds[:, -1]
+                        max_conf_idx = np.argmax(confidences)
+                        max_confidence = confidences[max_conf_idx]
+                        
+                        if max_confidence > 0.3:
+                            det = batch_preds[max_conf_idx]
+                            if len(det) >= 4:
+                                x_norm, y_norm = det[0], det[1]
+                                if len(det) >= 4:
+                                    w_norm, h_norm = det[2], det[3]
+                                else:
+                                    w_norm = h_norm = 0.02  # 默認大小
+                                
+                                x = int(x_norm * orig_w)
+                                y = int(y_norm * orig_h)
+                                w = int(w_norm * orig_w)
+                                h = int(h_norm * orig_h)
+                                
+                                return {
+                                    "center": [x, y],
+                                    "bbox": [max(0, x - w//2), max(0, y - h//2),
+                                            min(orig_w, x + w//2), min(orig_h, y + h//2)],
+                                    "confidence": float(max_confidence)
+                                }
+            
+            # 如果無法識別格式，返回 None（靜默失敗，不影響其他檢測）
             return None
             
         except Exception as e:
-            print(f"球檢測後處理錯誤: {e}")
+            # 靜默處理錯誤，避免中斷整個分析流程
+            # print(f"球檢測後處理錯誤: {e}")  # 取消註釋以調試
             return None
     
     def track_players(self, players):
