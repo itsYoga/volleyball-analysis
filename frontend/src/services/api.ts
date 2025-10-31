@@ -144,6 +144,14 @@ export const apiService = {
     return response.data;
   },
 
+  // 更新視頻名稱
+  async updateVideoName(videoId: string, newFilename: string) {
+    const response = await api.put(`/videos/${videoId}`, {
+      new_filename: newFilename
+    });
+    return response.data;
+  },
+
   // 播放影片
   getVideoUrl(videoId: string) {
     return `${API_BASE_URL}/play/${videoId}`;
@@ -158,5 +166,6 @@ export const getVideo = apiService.getVideo;
 export const getAnalysisStatus = apiService.getAnalysisStatus;
 export const getAnalysisResults = apiService.getAnalysisResults;
 export const getVideoUrl = apiService.getVideoUrl;
+export const updateVideoName = apiService.updateVideoName;
 
 export default apiService;

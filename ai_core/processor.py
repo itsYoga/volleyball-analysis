@@ -52,8 +52,50 @@ class VolleyballAnalyzer:
         if player_model_path and os.path.exists(player_model_path):
             self.load_player_model(player_model_path)
         
-        # 新增追蹤器實例
-        self.tracker = norfair.Tracker(distance_function="euclidean", distance_threshold=50, initialization_delay=1, hit_counter_max=10)
+        # 改進追蹤器配置：使用 IOU 距離函數以更好地處理重疊情況
+        # 自定義 IOU 距離函數（在初始化時定義，因為需要在 Tracker 中使用）
+        def iou_distance(detection, tracked_object):
+            """計算 IOU 距離（越小越好，1.0 - IOU）"""
+            # 獲取檢測框
+            if hasattr(detection, 'data') and detection.data and 'bbox' in detection.data:
+                det_bbox = detection.data['bbox']
+            else:
+                # 如果沒有 bbox，從中心點創建假設的 bbox
+                det_points = detection.points
+                cx = float(det_points[0])
+                cy = float(det_points[1]) if len(det_points) > 1 else float(det_points[0])
+                det_bbox = [cx - 25, cy - 50, cx + 25, cy + 50]
+            
+            # 獲取追蹤對象的 bbox
+            if hasattr(tracked_object, 'last_detection') and tracked_object.last_detection:
+                if hasattr(tracked_object.last_detection, 'data') and tracked_object.last_detection.data and 'bbox' in tracked_object.last_detection.data:
+                    tracked_bbox = tracked_object.last_detection.data['bbox']
+                else:
+                    # 從估計位置創建 bbox
+                    tracked_points = tracked_object.estimate
+                    tx = float(tracked_points[0])
+                    ty = float(tracked_points[1]) if len(tracked_points) > 1 else float(tracked_points[0])
+                    tracked_bbox = [tx - 25, ty - 50, tx + 25, ty + 50]
+            else:
+                # 從估計位置創建 bbox
+                tracked_points = tracked_object.estimate
+                tx = float(tracked_points[0])
+                ty = float(tracked_points[1]) if len(tracked_points) > 1 else float(tracked_points[0])
+                tracked_bbox = [tx - 25, ty - 50, tx + 25, ty + 50]
+            
+            # 計算 IOU
+            iou = self._iou(det_bbox, tracked_bbox)
+            # 返回距離（1.0 - IOU），IOU 越大距離越小
+            return 1.0 - iou
+        
+        # 使用改進的追蹤器：使用 IOU 距離函數，增加 hit_counter 以處理暫時丟失
+        self.tracker = norfair.Tracker(
+            distance_function=iou_distance,
+            distance_threshold=0.5,  # IOU 閾值（1.0 - 0.5 = 0.5 IOU 最低要求）
+            initialization_delay=2,  # 減少初始化延遲
+            hit_counter_max=15,      # 增加 hit_counter 以處理暫時丟失（快速移動或重疊）
+            past_detections_length=5  # 保留過去5幀的檢測用於預測
+        )
     
     def load_ball_model(self, model_path: str):
         """載入球追蹤模型 (ONNX)"""
@@ -85,6 +127,7 @@ class VolleyballAnalyzer:
     def detect_ball(self, frame: np.ndarray) -> Optional[Dict]:
         """
         檢測球的位置
+        使用VballNet ONNX模型，需要9幀序列緩衝區
         
         Args:
             frame: 輸入幀 (BGR格式)
@@ -92,24 +135,74 @@ class VolleyballAnalyzer:
         Returns:
             球的位置信息或None
         """
-        if self.ball_model is None:
-            return None
+        # 優先使用VballNet ONNX模型
+        if self.ball_model is not None:
+            try:
+                # 預處理當前幀
+                processed_frame = self.preprocess_ball_frame(frame)
+                
+                # 維護9幀緩衝區
+                self.ball_frame_buffer.append(processed_frame)
+                if len(self.ball_frame_buffer) > 9:
+                    self.ball_frame_buffer.pop(0)
+                
+                # 如果緩衝區不足9幀，用第一幀填充
+                while len(self.ball_frame_buffer) < 9:
+                    self.ball_frame_buffer.insert(0, processed_frame)
+                
+                # 準備輸入張量：堆疊9幀
+                # stack along channel axis: (288, 512, 9)
+                input_tensor = np.stack(self.ball_frame_buffer, axis=2)
+                # 添加batch維度: (1, 288, 512, 9)
+                input_tensor = np.expand_dims(input_tensor, axis=0)
+                # 轉置為 (1, 9, 288, 512)
+                input_tensor = np.transpose(input_tensor, (0, 3, 1, 2)).astype(np.float32)
+                
+                # 模型推理
+                input_name = self.ball_model.get_inputs()[0].name
+                output = self.ball_model.run(None, {input_name: input_tensor})[0]
+                
+                # 後處理結果（使用最後一個時間步的結果）
+                ball_info = self.postprocess_ball_output(output, frame.shape)
+                if ball_info and ball_info.get('confidence', 0) > 0.3:
+                    return ball_info
+            except Exception as e:
+                # 如果ONNX模型失敗，嘗試YOLO
+                if not hasattr(self, '_ball_onnx_error_logged'):
+                    print(f"ONNX球檢測錯誤，嘗試YOLO: {e}")
+                    self._ball_onnx_error_logged = True
         
-        try:
-            # 預處理幀
-            input_frame = self.preprocess_ball_frame(frame)
-            
-            # 模型推理
-            input_name = self.ball_model.get_inputs()[0].name
-            output = self.ball_model.run(None, {input_name: input_frame})
-            
-            # 後處理結果
-            ball_info = self.postprocess_ball_output(output, frame.shape)
-            return ball_info
-            
-        except Exception as e:
-            print(f"球檢測錯誤: {e}")
-            return None
+        # 備選方案：使用YOLO檢測"sports ball"
+        if self.player_model is not None:
+            try:
+                # 使用球員模型（YOLO）檢測sports ball
+                results = self.player_model(frame, verbose=False, conf=0.15, classes=[32])  # 32是COCO的sports ball類
+                if results and len(results) > 0:
+                    boxes = results[0].boxes
+                    if boxes is not None and len(boxes) > 0:
+                        # 找到置信度最高的球檢測
+                        best_box = None
+                        best_conf = 0.0
+                        for box in boxes:
+                            conf = float(box.conf[0].cpu().numpy())
+                            if conf > best_conf:
+                                best_conf = conf
+                                best_box = box
+                        
+                        if best_box and best_conf > 0.15:
+                            xyxy = best_box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+                            
+                            return {
+                                "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                                "confidence": best_conf
+                            }
+            except Exception as e:
+                # 靜默失敗
+                pass
+        
+        return None
     
     def detect_actions(self, frame: np.ndarray) -> List[Dict]:
         """
@@ -200,23 +293,28 @@ class VolleyballAnalyzer:
             return []
     
     def preprocess_ball_frame(self, frame: np.ndarray) -> np.ndarray:
-        """預處理球檢測幀，輸出形狀符合 VballNet: (1, 9, 288, 512) 灰階序列。
-        目前以單幀複製9次作為替代，後續可接入滑動視窗。"""
-        # 調整大小到 (W,H) = (512, 288)
+        """
+        預處理球檢測幀 - 使用真實的9幀序列緩衝區
+        根據 fast-volleyball-tracking-inference-master 的實現
+        """
+        # 轉換為灰度圖
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # 調整大小到 (512, 288)
         target_size = (512, 288)
-        resized = cv2.resize(frame, target_size)
-        # 轉灰階 (H,W)
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        # 正規化到 0-1，float32
-        gray_f = gray.astype(np.float32) / 255.0
-        # 疊成 9 個時間步: (9, H, W)
-        seq = np.stack([gray_f] * 9, axis=0)
-        # 添加 batch 維度 -> (1, 9, H, W)
-        input_tensor = np.expand_dims(seq, axis=0).astype(np.float32)
-        return input_tensor
+        resized = cv2.resize(gray, target_size)
+        
+        # 正規化到 [0, 1]
+        gray_f = resized.astype(np.float32) / 255.0
+        
+        return gray_f
     
     def postprocess_ball_output(self, output: List, frame_shape: Tuple) -> Optional[Dict]:
-        """後處理球檢測輸出 - VballNet 模型輸出格式處理"""
+        """
+        後處理球檢測輸出 - 使用與 fast-volleyball-tracking-inference-master 相同的方法
+        輸出格式: (1, 9, 288, 512) - 9個熱力圖，每個對應一個時間步
+        使用最後一個時間步（索引8）的結果
+        """
         try:
             # VballNet 輸出格式檢查
             predictions = output[0] if output else None
@@ -227,89 +325,68 @@ class VolleyballAnalyzer:
             pred_shape = predictions.shape
             orig_h, orig_w = frame_shape[:2]
             
-            # VballNet 可能輸出多種格式，嘗試常見格式
-            # 格式1: (batch, height, width) - 熱力圖格式
-            if len(pred_shape) == 3:
-                # 形狀: (1, H, W) 或 (batch, H, W)
-                heatmap = predictions[0] if pred_shape[0] == 1 else predictions
-                if len(heatmap.shape) == 2:
-                    # 找到熱力圖中的最大值位置
-                    max_val = float(np.max(heatmap))
-                    if max_val > 0.1:  # 降低置信度閾值到 0.1，提高檢測率
-                        max_pos = np.unravel_index(np.argmax(heatmap), heatmap.shape)
-                        # 轉換到原始座標（確保是標量）
-                        y_norm = float(max_pos[0]) / float(heatmap.shape[0])
-                        x_norm = float(max_pos[1]) / float(heatmap.shape[1])
-                        x = int(x_norm * orig_w)
-                        y = int(y_norm * orig_h)
+            # VballNet seq9 輸出格式: (1, 9, 288, 512)
+            if len(pred_shape) == 4 and pred_shape[1] == 9:
+                # 使用最後一個時間步的熱力圖（索引8）
+                heatmap = predictions[0, -1, :, :]  # (288, 512)
+                
+                # 應用閾值（根據原始項目使用0.5）
+                threshold = 0.5
+                _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
+                
+                # 尋找輪廓
+                contours, _ = cv2.findContours(
+                    (binary * 255).astype(np.uint8), 
+                    cv2.RETR_EXTERNAL, 
+                    cv2.CHAIN_APPROX_SIMPLE
+                )
+                
+                if contours:
+                    # 找到最大的輪廓
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(largest_contour)
+                    
+                    if M["m00"] != 0:
+                        # 計算質心（在縮放後的座標系中）
+                        cx_norm = int(M["m10"] / M["m00"])
+                        cy_norm = int(M["m01"] / M["m00"])
                         
-                        # 估算球的大小（假設為固定比例）
-                        ball_size = min(orig_w, orig_h) * 0.02  # 約2%的畫面大小
-                        w = h = int(ball_size)
+                        # 計算邊界框
+                        x_norm, y_norm, w_norm, h_norm = cv2.boundingRect(largest_contour)
                         
-                        return {
-                            "center": [x, y],
-                            "bbox": [max(0, x - w//2), max(0, y - h//2), 
-                                    min(orig_w, x + w//2), min(orig_h, y + h//2)],
-                            "confidence": max_val
-                        }
-            
-            # 格式2: (batch, num_detections, features) - 檢測框格式
-            elif len(pred_shape) == 3 and pred_shape[2] >= 4:
-                # 形狀: (1, N, 4) 或 (batch, N, 4) - 可能是 [x, y, w, h] 或 [x1, y1, x2, y2]
-                detections = predictions[0] if pred_shape[0] == 1 else predictions
-                # 找到置信度最高的檢測
-                if pred_shape[2] >= 5:  # 包含置信度
-                    confidences = detections[:, 4] if detections.shape[1] > 4 else None
-                    if confidences is not None:
-                        max_idx = np.argmax(confidences)
-                        max_conf = float(confidences[max_idx])
-                        if max_conf > 0.1:  # 降低置信度閾值
-                            det = detections[max_idx]
-                            # 假設格式為 [x, y, w, h] 或 [x1, y1, x2, y2]
-                            if len(det) >= 4:
-                                x1, y1, x2, y2 = float(det[0]), float(det[1]), float(det[2]), float(det[3])
-                                # 如果看起來是 [x, y, w, h] 格式，轉換
-                                if x2 < x1 or y2 < y1:
-                                    w, h = x2, y2
-                                    x1, y1 = x1 - w/2, y1 - h/2
-                                    x2, y2 = x1 + w, y1 + h
-                                
-                                return {
-                                    "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
-                                    "bbox": [max(0, int(x1)), max(0, int(y1)), 
-                                            min(orig_w, int(x2)), min(orig_h, int(y2))],
-                                    "confidence": max_conf
-                                }
-            
-            # 如果以上格式都不匹配，嘗試找到任何非零值
-            if len(pred_shape) >= 2:
-                flat_pred = predictions.flatten()
-                max_val = float(np.max(flat_pred))
-                if max_val > 0.1:  # 降低閾值
-                    max_idx = np.argmax(flat_pred)
-                    # 嘗試從索引推斷位置
-                    if len(pred_shape) == 2:
-                        y_idx = max_idx // pred_shape[1]
-                        x_idx = max_idx % pred_shape[1]
-                        x = int((x_idx / pred_shape[1]) * orig_w)
-                        y = int((y_idx / pred_shape[0]) * orig_h)
-                        ball_size = min(orig_w, orig_h) * 0.02
-                        w = h = int(ball_size)
+                        # 轉換到原始座標系
+                        x = int(cx_norm * orig_w / 512)
+                        y = int(cy_norm * orig_h / 288)
+                        w = int(w_norm * orig_w / 512)
+                        h = int(h_norm * orig_h / 288)
+                        
+                        # 計算置信度（使用熱力圖的最大值）
+                        max_val = float(np.max(heatmap))
+                        
+                        # 計算邊界框
+                        x1 = max(0, x - w // 2)
+                        y1 = max(0, y - h // 2)
+                        x2 = min(orig_w, x + w // 2)
+                        y2 = min(orig_h, y + h // 2)
                         
                         return {
                             "center": [x, y],
-                            "bbox": [max(0, x - w//2), max(0, y - h//2), 
-                                    min(orig_w, x + w//2), min(orig_h, y + h//2)],
+                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
                             "confidence": max_val
                         }
             
-            # 如果無法識別格式，返回 None（靜默失敗，不影響其他檢測）
+            # 如果無法識別格式，返回 None
             return None
             
         except Exception as e:
-            # 靜默處理錯誤，避免中斷整個分析流程
-            # print(f"球檢測後處理錯誤: {e}")  # 取消註釋以調試
+            # 添加錯誤輸出以便調試
+            if not hasattr(self, '_ball_error_count'):
+                self._ball_error_count = 0
+            if self._ball_error_count < 3:
+                print(f"球檢測後處理錯誤: {e}")
+                import traceback
+                traceback.print_exc()
+                self._ball_error_count += 1
             return None
     
     def track_players(self, players):
@@ -321,7 +398,15 @@ class VolleyballAnalyzer:
             cx = (float(bbox[0]) + float(bbox[2])) / 2.0
             cy = (float(bbox[1]) + float(bbox[3])) / 2.0
             conf = float(d['confidence'])
-            norfair_dets.append(norfair.Detection(points=np.array([cx, cy]), scores=np.array([conf])))
+            
+            # 創建檢測對象並附加 bbox 信息用於 IOU 計算
+            detection = norfair.Detection(
+                points=np.array([cx, cy]), 
+                scores=np.array([conf]),
+                data={'bbox': bbox}  # 附加 bbox 信息
+            )
+            norfair_dets.append(detection)
+        
         tracked = self.tracker.update(norfair_dets)
         output = []
         for t in tracked:
@@ -360,9 +445,18 @@ class VolleyballAnalyzer:
             except (AttributeError, TypeError, ValueError):
                 max_score = 0.0
             
+            # 從 last_detection 獲取 bbox（如果可用）
+            bbox = None
+            if hasattr(t, 'last_detection') and hasattr(t.last_detection, 'data') and 'bbox' in t.last_detection.data:
+                bbox = t.last_detection.data['bbox']
+            else:
+                # 如果沒有 bbox，使用估計位置創建一個默認大小的 bbox
+                w, h = 50, 100  # 默認寬高
+                bbox = [est_x - w/2, est_y - h/2, est_x + w/2, est_y + h/2]
+            
             output.append({
                 'id': int(t.id),
-                'bbox': [float(est_x-20), float(est_y-20), float(est_x+20), float(est_y+20)],
+                'bbox': bbox,
                 'confidence': max_score
             })
         return output
@@ -420,7 +514,7 @@ class VolleyballAnalyzer:
         
         return closest_player_id
 
-    def analyze_video(self, video_path: str, output_path: str = None) -> dict:
+    def analyze_video(self, video_path: str, output_path: str = None, progress_callback=None) -> dict:
         """
         分析整個影片
         
@@ -503,6 +597,9 @@ class VolleyballAnalyzer:
         # 動作合併參數
         MIN_ACTION_FRAMES = 3  # 最小動作持續時間（幀數）
         MAX_GAP_FRAMES = 5  # 最大間隔幀數（超過此幀數認為動作結束）
+        
+        # 重置球追蹤緩衝區（每次分析新視頻時）
+        self.ball_frame_buffer = []
         
         def finalize_action(key: Tuple[int, str], current_frame: int, current_timestamp: float):
             """完成並保存一個動作"""
@@ -642,11 +739,18 @@ class VolleyballAnalyzer:
                     results["game_states"][-1]["end_frame"] = int(frame_count)
                     results["game_states"][-1]["end_timestamp"] = timestamp
                 
-                # 進度顯示
-                if frame_count % 100 == 0:
-                    progress = (frame_count / total_frames) * 100
+                # 進度顯示和回調
+                if frame_count % 10 == 0 or frame_count == total_frames:  # 每10幀或最後一幀更新一次
+                    progress = (frame_count / total_frames) * 100 if total_frames > 0 else 0
                     elapsed = time.time() - start_time
-                    print(f"⏳ 進度: {progress:.1f}% ({frame_count}/{total_frames}) - {elapsed:.1f}s")
+                    if frame_count % 100 == 0:  # 每100幀打印一次
+                        print(f"⏳ 進度: {progress:.1f}% ({frame_count}/{total_frames}) - {elapsed:.1f}s")
+                    # 調用進度回調
+                    if progress_callback:
+                        try:
+                            progress_callback(progress, frame_count, total_frames)
+                        except Exception as e:
+                            print(f"進度回調錯誤: {e}")
             
             # 視頻處理完成，完成所有未完成的動作
             final_timestamp = float(frame_count) / fps_scalar if frame_count > 0 else 0.0

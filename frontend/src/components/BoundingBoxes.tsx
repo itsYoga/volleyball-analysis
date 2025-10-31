@@ -74,11 +74,12 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
     // Draw player bounding boxes
     if (showPlayers && playerTracks.length > 0) {
       // Find the track entry closest to current frame
+      // Use linear interpolation for smoother rendering between frames
       let currentTrack = playerTracks.find(
         (track) => track.frame === currentFrame
       );
       
-      // If exact match not found, find closest one within 3 frames
+      // If exact match not found, find closest one within 15 frames (increased for better matching)
       if (!currentTrack) {
         currentTrack = playerTracks.reduce((closest, track) => {
           if (!closest) return track;
@@ -88,8 +89,8 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
         }, null as any);
       }
 
-      // Only draw if we found a track within reasonable range (increased to 10 frames for better matching)
-      if (currentTrack && currentTrack.players && Math.abs(currentTrack.frame - currentFrame) <= 10) {
+      // Only draw if we found a track within reasonable range (increased to 15 frames for better matching)
+      if (currentTrack && currentTrack.players && Math.abs(currentTrack.frame - currentFrame) <= 15) {
         // Filter players by confidence threshold (0.5 = 50%)
         const filteredPlayers = currentTrack.players.filter((player: any) => 
           player.confidence === undefined || player.confidence >= 0.5
@@ -127,11 +128,12 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
 
     // Draw action bounding boxes
     if (showActions && actions.length > 0) {
-      // Filter actions within 2 frames of current time and by confidence threshold (0.6 = 60%)
+      // Filter actions within 10 frames of current time (increased from 2 for better visibility)
+      // and by confidence threshold (0.6 = 60%)
       const currentActions = actions.filter(
         (action) => 
           action.frame !== undefined && 
-          Math.abs(action.frame - currentFrame) <= 2 &&
+          Math.abs(action.frame - currentFrame) <= 10 &&
           (action.confidence === undefined || action.confidence >= 0.6)
       );
 

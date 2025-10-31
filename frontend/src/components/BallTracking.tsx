@@ -31,19 +31,54 @@ export const BallTracking: React.FC<BallTrackingProps> = ({
     
     ctx.clearRect(0, 0, videoSize.width, videoSize.height);
     
-    if (!ballTrajectory || ballTrajectory.length === 0) return;
+    if (!ballTrajectory || ballTrajectory.length === 0) {
+      // Debug: log when no trajectory data
+      if (enabled) {
+        console.log('BallTracking: No trajectory data available', { 
+          trajectoryLength: ballTrajectory?.length || 0,
+          enabled,
+          currentTime 
+        });
+      }
+      return;
+    }
+    
+    const currentFrame = Math.round(currentTime * fps);
     
     // Filter ball positions within a window around current time (show recent trajectory)
     const timeWindow = 2.0; // Show last 2 seconds of trajectory
     const minTime = currentTime - timeWindow;
     const maxTime = currentTime;
     
+    // Try multiple ways to match ball positions
     const relevantPositions = ballTrajectory.filter((pos: any) => {
-      const posTime = pos.timestamp || (pos.frame || 0) / fps;
-      return posTime >= minTime && posTime <= maxTime;
+      // Try timestamp first
+      if (pos.timestamp !== undefined) {
+        return pos.timestamp >= minTime && pos.timestamp <= maxTime;
+      }
+      // Fallback to frame-based matching
+      if (pos.frame !== undefined) {
+        const posFrame = pos.frame;
+        const minFrame = currentFrame - (timeWindow * fps);
+        const maxFrame = currentFrame;
+        return posFrame >= minFrame && posFrame <= maxFrame;
+      }
+      return false;
     });
     
-    if (relevantPositions.length === 0) return;
+    if (relevantPositions.length === 0) {
+      // Debug: log when no relevant positions found
+      if (enabled) {
+        console.log('BallTracking: No relevant positions found', {
+          currentFrame,
+          currentTime,
+          totalTrajectory: ballTrajectory.length,
+          firstPos: ballTrajectory[0],
+          lastPos: ballTrajectory[ballTrajectory.length - 1]
+        });
+      }
+      return;
+    }
     
     // Draw trajectory path
     ctx.strokeStyle = '#FFD700'; // Gold color for ball trail

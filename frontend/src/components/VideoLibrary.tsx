@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getVideos } from '../services/api';
+import { getVideos, updateVideoName } from '../services/api';
 import { EmptyState } from './ui/EmptyState';
 import { StatusBadge } from './ui/StatusBadge';
-import { PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2 } from 'lucide-react';
+import { PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2, Edit2, Check, X } from 'lucide-react';
 
 export const VideoLibrary: React.FC = () => {
   const [videos, setVideos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [editingVideoId, setEditingVideoId] = useState<string | null>(null);
+  const [editName, setEditName] = useState<string>('');
 
   useEffect(() => {
     let isMounted = true;
@@ -50,6 +52,34 @@ export const VideoLibrary: React.FC = () => {
     completed: videos.filter(v => v.status === 'completed').length,
     processing: videos.filter(v => v.status === 'processing').length,
     failed: videos.filter(v => v.status === 'failed').length,
+  };
+
+  const handleStartEdit = (videoId: string, currentName: string) => {
+    setEditingVideoId(videoId);
+    setEditName(currentName);
+  };
+
+  const handleSaveEdit = async (videoId: string) => {
+    if (!editName.trim()) {
+      setEditingVideoId(null);
+      return;
+    }
+
+    try {
+      await updateVideoName(videoId, editName.trim());
+      // 更新本地狀態
+      setVideos(videos.map(v => v.id === videoId ? { ...v, filename: editName.trim() } : v));
+      setEditingVideoId(null);
+      setEditName('');
+    } catch (error) {
+      console.error('Failed to update video name:', error);
+      alert('更新視頻名稱失敗，請重試');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingVideoId(null);
+    setEditName('');
   };
 
   return (
@@ -143,9 +173,51 @@ export const VideoLibrary: React.FC = () => {
                 <div className="p-6 flex flex-col h-full">
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors" title={v.filename}>
-                        {v.filename}
-                      </h3>
+                      {editingVideoId === v.id ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="flex-1 px-2 py-1 border border-blue-500 rounded text-sm font-semibold text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleSaveEdit(v.id);
+                              } else if (e.key === 'Escape') {
+                                handleCancelEdit();
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => handleSaveEdit(v.id)}
+                            className="p-1 text-green-600 hover:text-green-700 transition-colors"
+                            title="Save"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            className="p-1 text-red-600 hover:text-red-700 transition-colors"
+                            title="Cancel"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 group">
+                          <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors flex-1" title={v.filename}>
+                            {v.filename}
+                          </h3>
+                          <button
+                            onClick={() => handleStartEdit(v.id, v.filename)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-blue-600 transition-all"
+                            title="Rename video"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                       <p className="text-sm text-gray-500 mt-2 flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
                         {new Date(v.upload_time).toLocaleString()}
