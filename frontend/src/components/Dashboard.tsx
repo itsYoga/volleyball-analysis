@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getVideos } from '../services/api';
-import { Loader2, PlayCircle, Library, Info, Upload, Video, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Loader2, PlayCircle, Library, Upload, Video, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
 import { StatusBadge } from './ui/StatusBadge';
 import { EmptyState } from './ui/EmptyState';
 

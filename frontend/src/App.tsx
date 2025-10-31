@@ -85,9 +85,9 @@ function App() {
                 © {new Date().getFullYear()} Volleyball AI Analysis System. Powered by AI.
               </p>
               <div className="flex items-center gap-6 text-sm text-gray-500">
-                <a href="#" className="hover:text-gray-900 transition-colors">Privacy</a>
-                <a href="#" className="hover:text-gray-900 transition-colors">Terms</a>
-                <a href="#" className="hover:text-gray-900 transition-colors">Support</a>
+                <button className="hover:text-gray-900 transition-colors cursor-pointer">Privacy</button>
+                <button className="hover:text-gray-900 transition-colors cursor-pointer">Terms</button>
+                <button className="hover:text-gray-900 transition-colors cursor-pointer">Support</button>
               </div>
             </div>
           </div>

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getVideos } from '../services/api';
 import { EmptyState } from './ui/EmptyState';
 import { StatusBadge } from './ui/StatusBadge';
-import { Info, PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2 } from 'lucide-react';
+import { PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2 } from 'lucide-react';
 
 export const VideoLibrary: React.FC = () => {
   const [videos, setVideos] = useState<any[]>([]);
