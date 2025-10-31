@@ -291,18 +291,28 @@ class VolleyballAnalyzer:
         # players = [{bbox:..., confidence:...}]
         norfair_dets = []
         for d in players:
-            cx = (d['bbox'][0]+d['bbox'][2])/2
-            cy = (d['bbox'][1]+d['bbox'][3])/2
-            norfair_dets.append(norfair.Detection(points=np.array([cx, cy]), scores=np.array([d['confidence']])))
+            cx = float(d['bbox'][0]+d['bbox'][2])/2.0
+            cy = float(d['bbox'][1]+d['bbox'][3])/2.0
+            norfair_dets.append(norfair.Detection(points=np.array([cx, cy]), scores=np.array([float(d['confidence'])])))
         tracked = self.tracker.update(norfair_dets)
         output = []
         for t in tracked:
             # 預設20*20 bbox，實際可根據模型微調判斷
             est = t.estimate
+            # 確保 est 是標量或轉換為標量
+            est_x = float(est[0]) if hasattr(est[0], '__len__') else float(est[0])
+            est_y = float(est[1]) if hasattr(est[1], '__len__') else float(est[1])
+            # 處理 scores
+            scores = t.last_detection.scores
+            if hasattr(scores, '__len__') and len(scores) > 0:
+                max_score = float(np.max(scores)) if hasattr(np, 'max') else float(max(scores))
+            else:
+                max_score = float(scores) if not hasattr(scores, '__len__') else 0.0
+            
             output.append({
                 'id': int(t.id),
-                'bbox': [float(est[0]-20), float(est[1]-20), float(est[0]+20), float(est[1]+20)],
-                'confidence': float(max(t.last_detection.scores))
+                'bbox': [float(est_x-20), float(est_y-20), float(est_x+20), float(est_y+20)],
+                'confidence': max_score
             })
         return output
 
