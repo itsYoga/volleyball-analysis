@@ -291,23 +291,37 @@ class VolleyballAnalyzer:
         # players = [{bbox:..., confidence:...}]
         norfair_dets = []
         for d in players:
-            cx = float(d['bbox'][0]+d['bbox'][2])/2.0
-            cy = float(d['bbox'][1]+d['bbox'][3])/2.0
-            norfair_dets.append(norfair.Detection(points=np.array([cx, cy]), scores=np.array([float(d['confidence'])])))
+            # 確保座標是 Python 標量
+            bbox = d['bbox']
+            cx = (float(bbox[0]) + float(bbox[2])) / 2.0
+            cy = (float(bbox[1]) + float(bbox[3])) / 2.0
+            conf = float(d['confidence'])
+            norfair_dets.append(norfair.Detection(points=np.array([cx, cy]), scores=np.array([conf])))
         tracked = self.tracker.update(norfair_dets)
         output = []
         for t in tracked:
             # 預設20*20 bbox，實際可根據模型微調判斷
             est = t.estimate
-            # 確保 est 是標量或轉換為標量
-            est_x = float(est[0]) if hasattr(est[0], '__len__') else float(est[0])
-            est_y = float(est[1]) if hasattr(est[1], '__len__') else float(est[1])
-            # 處理 scores
-            scores = t.last_detection.scores
-            if hasattr(scores, '__len__') and len(scores) > 0:
-                max_score = float(np.max(scores)) if hasattr(np, 'max') else float(max(scores))
-            else:
-                max_score = float(scores) if not hasattr(scores, '__len__') else 0.0
+            # 確保轉換為 Python 標量（使用 .item() 如果是 NumPy 數組）
+            try:
+                est_x = float(est[0].item() if hasattr(est[0], 'item') else est[0])
+                est_y = float(est[1].item() if hasattr(est[1], 'item') else est[1])
+            except (AttributeError, TypeError, IndexError):
+                est_arr = np.asarray(est).flatten()
+                est_x = float(est_arr[0]) if len(est_arr) > 0 else 0.0
+                est_y = float(est_arr[1]) if len(est_arr) > 1 else 0.0
+            
+            # 處理 scores - 確保是標量
+            try:
+                scores = t.last_detection.scores
+                if isinstance(scores, np.ndarray):
+                    max_score = float(np.max(scores))
+                elif hasattr(scores, '__len__') and len(scores) > 0:
+                    max_score = float(max(scores))
+                else:
+                    max_score = float(scores) if not hasattr(scores, '__len__') else 0.0
+            except (AttributeError, TypeError):
+                max_score = 0.0
             
             output.append({
                 'id': int(t.id),
