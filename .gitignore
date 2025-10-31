@@ -19,15 +19,23 @@ backend/__pycache__/
 # Data & uploads
 data/uploads/
 data/results/
+backend/data/uploads/
+backend/data/results/
 static/
 
 # Models (large files)
 models/*.pt
 models/*.onnx
 models/*.bin
+models/
 
 # OS
 .DS_Store
 
 # Videos
 test_video/
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
