@@ -9,6 +9,7 @@ interface Props {
   currentFrame?: number;
   onSeek: (sec: number) => void;
   fps?: number; // frames per second for time conversion
+  playerNames?: Record<number, string>;
 }
 
 const getActionIcon = (action?: string) => {
@@ -53,10 +54,15 @@ export const EventTimeline: React.FC<Props> = ({
   duration, 
   currentFrame = 0, 
   onSeek,
-  fps = 30
+  fps = 30,
+  playerNames = {}
 }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = React.useState(false);
+
+  const getPlayerName = (playerId: number): string => {
+    return playerNames[playerId] || `Player #${playerId}`;
+  };
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return; // Only left mouse button
@@ -117,7 +123,7 @@ export const EventTimeline: React.FC<Props> = ({
                   onSeek(e.timestamp);
                 }}
                 onMouseDown={(evt) => evt.stopPropagation()}
-                title={`Score by Player #${e.player_id} @ ${e.timestamp?.toFixed(1)}s`}
+                title={`Score by ${getPlayerName(e.player_id)} @ ${e.timestamp?.toFixed(1)}s`}
               >
                 <div className="bg-gradient-to-br from-yellow-400 to-yellow-600 border-2 border-yellow-700 rounded-full p-1.5 shadow-lg group-hover:scale-110 transition-transform">
                   <Trophy className="w-3 h-3 text-white" />
@@ -171,12 +177,12 @@ export const EventTimeline: React.FC<Props> = ({
                     onSeek(a.timestamp);
                   }}
                   onMouseDown={(evt) => evt.stopPropagation()}
-                  title={`${a.action.charAt(0).toUpperCase() + a.action.slice(1)}${a.player_id ? ` by Player #${a.player_id}` : ''} @ ${a.timestamp?.toFixed(1)}s`}
+                  title={`${a.action.charAt(0).toUpperCase() + a.action.slice(1)}${a.player_id ? ` by ${getPlayerName(a.player_id)}` : ''} @ ${a.timestamp?.toFixed(1)}s`}
                 >
                   {getActionIcon(a.action)}
                   <span className="text-xs font-semibold">{a.action}</span>
                   {a.player_id && (
-                    <span className="text-xs opacity-90">#{a.player_id}</span>
+                    <span className="text-xs opacity-90">{getPlayerName(a.player_id)}</span>
                   )}
                 </button>
               );

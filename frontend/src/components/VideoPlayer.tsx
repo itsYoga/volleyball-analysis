@@ -4,7 +4,9 @@ import { getVideoUrl, getAnalysisResults, getVideo } from '../services/api';
 import { EventTimeline } from './EventTimeline';
 import { PlayerHeatmap } from './PlayerHeatmap';
 import { BoundingBoxes } from './BoundingBoxes';
-import { Loader2, AlertCircle, Clock, RefreshCw, ArrowLeft, PlayCircle } from 'lucide-react';
+import { BallTracking } from './BallTracking';
+import { PlayerStats } from './PlayerStats';
+import { Loader2, AlertCircle, Clock, RefreshCw, ArrowLeft, PlayCircle, Users } from 'lucide-react';
 
 export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   const params = useParams();
@@ -14,8 +16,34 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   const [error, setError] = useState<string>('');
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
-  const [showBoundingBoxes, setShowBoundingBoxes] = useState<boolean>(true);
+  const [showPlayerBoxes, setShowPlayerBoxes] = useState<boolean>(true);
+  const [showActionBoxes, setShowActionBoxes] = useState<boolean>(true);
+  const [showBallTracking, setShowBallTracking] = useState<boolean>(false);
+  const [showPlayerStats, setShowPlayerStats] = useState<boolean>(false);
+  const [playerNames, setPlayerNames] = useState<Record<number, string>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Load player names from localStorage
+  useEffect(() => {
+    if (!effectiveId) return;
+    const storedNames = localStorage.getItem(`playerNames_${effectiveId}`);
+    if (storedNames) {
+      try {
+        setPlayerNames(JSON.parse(storedNames));
+      } catch (e) {
+        console.error('Failed to load player names:', e);
+      }
+    }
+  }, [effectiveId]);
+
+  // Save player names to localStorage
+  const handlePlayerNameChange = (playerId: number, name: string) => {
+    const newNames = { ...playerNames, [playerId]: name };
+    setPlayerNames(newNames);
+    if (effectiveId) {
+      localStorage.setItem(`playerNames_${effectiveId}`, JSON.stringify(newNames));
+    }
+  };
 
   useEffect(() => {
     if (!effectiveId) return;
@@ -160,7 +188,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
 
   if (!result) return null;
 
-  const { action_recognition, scores, players_tracking, game_states, video_info } = result;
+  const { action_recognition, scores, players_tracking, game_states, video_info, ball_tracking } = result;
   const fps = video_info?.fps || 30;
   const totalFrames = video_info?.total_frames || Math.round((video_info?.duration || 0) * fps) || 1000;
   const currentFrame = Math.max(0, Math.min(totalFrames, Math.round(currentTime * fps)));
@@ -184,15 +212,33 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
         
         <div className="p-6">
           {/* Controls */}
-          <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200">
+          <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200 flex-wrap">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={showBoundingBoxes}
-                onChange={(e) => setShowBoundingBoxes(e.target.checked)}
+                checked={showPlayerBoxes}
+                onChange={(e) => setShowPlayerBoxes(e.target.checked)}
                 className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
               />
-              <span className="text-sm font-medium text-gray-700">Show Bounding Boxes</span>
+              <span className="text-sm font-medium text-gray-700">Show Player Boxes</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showActionBoxes}
+                onChange={(e) => setShowActionBoxes(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Show Action Boxes</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showBallTracking}
+                onChange={(e) => setShowBallTracking(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Show Ball Tracking</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -202,6 +248,15 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                 className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
               />
               <span className="text-sm font-medium text-gray-700">Show Heatmap</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showPlayerStats}
+                onChange={(e) => setShowPlayerStats(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Show Player Stats</span>
             </label>
           </div>
 
@@ -220,15 +275,16 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                 }}
               />
               {/* Bounding Boxes Overlay */}
-              {showBoundingBoxes && (
+              {(showPlayerBoxes || showActionBoxes) && (
                 <BoundingBoxes
                   playerTracks={players_tracking || []}
                   actions={action_recognition?.actions || []}
                   currentTime={currentTime}
                   fps={fps}
                   videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}
-                  showPlayers={true}
-                  showActions={true}
+                  showPlayers={showPlayerBoxes}
+                  showActions={showActionBoxes}
+                  playerNames={playerNames}
                 />
               )}
               {/* Heatmap Overlay (optional, less intrusive) */}
@@ -241,9 +297,39 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                   fps={fps}
                 />
               )}
+              {/* Ball Tracking Overlay */}
+              {showBallTracking && ball_tracking?.trajectory && (
+                <BallTracking
+                  ballTrajectory={ball_tracking.trajectory || []}
+                  currentTime={currentTime}
+                  fps={fps}
+                  videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }}
+                  enabled={showBallTracking}
+                />
+              )}
             </div>
           </div>
         </div>
+
+        {/* Player Statistics Section */}
+        {showPlayerStats && (
+          <div className="px-6 pb-6 border-t border-gray-200 pt-6">
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                <Users className="w-4 h-4" /> Player Statistics
+              </h3>
+              <PlayerStats
+                actions={action_recognition?.actions || []}
+                playerTracks={players_tracking || []}
+                videoId={effectiveId}
+                fps={fps}
+                onSeek={handleSeek}
+                onPlayerNameChange={handlePlayerNameChange}
+                playerNames={playerNames}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Event Timeline */}
         <div className="px-6 pb-6">
@@ -259,6 +345,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
               currentFrame={currentFrame}
               onSeek={handleSeek}
               fps={fps}
+              playerNames={playerNames}
             />
           </div>
         </div>

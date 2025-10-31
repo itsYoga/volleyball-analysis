@@ -8,6 +8,7 @@ interface BoundingBoxesProps {
   videoSize: { width: number; height: number };
   showPlayers?: boolean;
   showActions?: boolean;
+  playerNames?: Record<number, string>;
 }
 
 const getPlayerColor = (playerId: number): string => {
@@ -43,6 +44,7 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
   videoSize,
   showPlayers = true,
   showActions = true,
+  playerNames = {}
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -51,6 +53,11 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
     
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
+
+    // Helper function to get player name
+    const getPlayerName = (playerId: number): string => {
+      return playerNames[playerId] || `Player #${playerId}`;
+    };
 
     // Ensure canvas size matches video size
     const canvas = canvasRef.current;
@@ -101,7 +108,7 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
           // Draw label background
-          const label = `Player #${player.id}`;
+          const label = getPlayerName(player.id || 0);
           ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
           ctx.textBaseline = 'top';
           const textMetrics = ctx.measureText(label);
@@ -140,8 +147,11 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
         ctx.setLineDash([5, 5]);
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-        // Draw action label
-        const label = `${action.action.toUpperCase()} ${action.player_id ? `#${action.player_id}` : ''}`;
+        // Draw action label with player name if available
+        const playerName = action.player_id !== undefined && action.player_id !== null 
+          ? getPlayerName(action.player_id) 
+          : '';
+        const label = `${action.action.toUpperCase()}${playerName ? ` ${playerName}` : action.player_id ? ` #${action.player_id}` : ''}`;
         ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
         ctx.textBaseline = 'top';
         const textMetrics = ctx.measureText(label);
@@ -157,7 +167,7 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
         ctx.fillText(label, x1 + 4, y1 - textHeight + 2);
       });
     }
-  }, [playerTracks, actions, currentTime, fps, videoSize, showPlayers, showActions]);
+  }, [playerTracks, actions, currentTime, fps, videoSize, showPlayers, showActions, playerNames]);
 
   return (
     <canvas

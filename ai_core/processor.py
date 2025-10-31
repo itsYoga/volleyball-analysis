@@ -235,7 +235,7 @@ class VolleyballAnalyzer:
                 if len(heatmap.shape) == 2:
                     # 找到熱力圖中的最大值位置
                     max_val = float(np.max(heatmap))
-                    if max_val > 0.3:  # 置信度閾值
+                    if max_val > 0.1:  # 降低置信度閾值到 0.1，提高檢測率
                         max_pos = np.unravel_index(np.argmax(heatmap), heatmap.shape)
                         # 轉換到原始座標（確保是標量）
                         y_norm = float(max_pos[0]) / float(heatmap.shape[0])
@@ -255,39 +255,54 @@ class VolleyballAnalyzer:
                         }
             
             # 格式2: (batch, num_detections, features) - 檢測框格式
-            elif len(pred_shape) == 3 and pred_shape[2] >= 5:
-                # 嘗試找到有效檢測
-                batch_preds = predictions[0] if pred_shape[0] == 1 else predictions
-                if len(batch_preds.shape) == 2:
-                    # 找到最高置信度的檢測
-                    if batch_preds.shape[1] >= 5:
-                        confidences = batch_preds[:, 4] if batch_preds.shape[1] > 4 else batch_preds[:, -1]
-                        max_conf_idx = int(np.argmax(confidences))
-                        max_confidence = float(confidences[max_conf_idx])
-                        
-                        if max_confidence > 0.3:
-                            det = batch_preds[max_conf_idx]
+            elif len(pred_shape) == 3 and pred_shape[2] >= 4:
+                # 形狀: (1, N, 4) 或 (batch, N, 4) - 可能是 [x, y, w, h] 或 [x1, y1, x2, y2]
+                detections = predictions[0] if pred_shape[0] == 1 else predictions
+                # 找到置信度最高的檢測
+                if pred_shape[2] >= 5:  # 包含置信度
+                    confidences = detections[:, 4] if detections.shape[1] > 4 else None
+                    if confidences is not None:
+                        max_idx = np.argmax(confidences)
+                        max_conf = float(confidences[max_idx])
+                        if max_conf > 0.1:  # 降低置信度閾值
+                            det = detections[max_idx]
+                            # 假設格式為 [x, y, w, h] 或 [x1, y1, x2, y2]
                             if len(det) >= 4:
-                                # 確保轉換為 Python 標量
-                                x_norm = float(det[0])
-                                y_norm = float(det[1])
-                                if len(det) >= 4:
-                                    w_norm = float(det[2])
-                                    h_norm = float(det[3])
-                                else:
-                                    w_norm = h_norm = 0.02  # 默認大小
-                                
-                                x = int(x_norm * orig_w)
-                                y = int(y_norm * orig_h)
-                                w = int(w_norm * orig_w)
-                                h = int(h_norm * orig_h)
+                                x1, y1, x2, y2 = float(det[0]), float(det[1]), float(det[2]), float(det[3])
+                                # 如果看起來是 [x, y, w, h] 格式，轉換
+                                if x2 < x1 or y2 < y1:
+                                    w, h = x2, y2
+                                    x1, y1 = x1 - w/2, y1 - h/2
+                                    x2, y2 = x1 + w, y1 + h
                                 
                                 return {
-                                    "center": [x, y],
-                                    "bbox": [max(0, x - w//2), max(0, y - h//2),
-                                            min(orig_w, x + w//2), min(orig_h, y + h//2)],
-                                    "confidence": max_confidence
+                                    "center": [int((x1 + x2) / 2), int((y1 + y2) / 2)],
+                                    "bbox": [max(0, int(x1)), max(0, int(y1)), 
+                                            min(orig_w, int(x2)), min(orig_h, int(y2))],
+                                    "confidence": max_conf
                                 }
+            
+            # 如果以上格式都不匹配，嘗試找到任何非零值
+            if len(pred_shape) >= 2:
+                flat_pred = predictions.flatten()
+                max_val = float(np.max(flat_pred))
+                if max_val > 0.1:  # 降低閾值
+                    max_idx = np.argmax(flat_pred)
+                    # 嘗試從索引推斷位置
+                    if len(pred_shape) == 2:
+                        y_idx = max_idx // pred_shape[1]
+                        x_idx = max_idx % pred_shape[1]
+                        x = int((x_idx / pred_shape[1]) * orig_w)
+                        y = int((y_idx / pred_shape[0]) * orig_h)
+                        ball_size = min(orig_w, orig_h) * 0.02
+                        w = h = int(ball_size)
+                        
+                        return {
+                            "center": [x, y],
+                            "bbox": [max(0, x - w//2), max(0, y - h//2), 
+                                    min(orig_w, x + w//2), min(orig_h, y + h//2)],
+                            "confidence": max_val
+                        }
             
             # 如果無法識別格式，返回 None（靜默失敗，不影響其他檢測）
             return None
@@ -368,12 +383,42 @@ class VolleyballAnalyzer:
 
     def assign_action_to_player(self, action_bbox, tracked_players):
         # action_bbox: [x1,y1,x2,y2]; tracked_players含id/bbox
+        if not tracked_players:
+            return None
+        
         max_iou, player_id = 0, None
         for p in tracked_players:
+            if 'bbox' not in p or not p['bbox']:
+                continue
             iou = self._iou(action_bbox, p['bbox'])
             if iou > max_iou:
                 max_iou, player_id = iou, p['id']
-        return player_id if max_iou > 0.2 else None
+        
+        # 降低 IOU 閾值到 0.05，並考慮距離（如果 IOU 低但距離近也匹配）
+        if max_iou > 0.05:
+            return player_id
+        
+        # 如果 IOU 低，嘗試基於中心點距離匹配
+        action_center = [(action_bbox[0] + action_bbox[2]) / 2, (action_bbox[1] + action_bbox[3]) / 2]
+        min_distance = float('inf')
+        closest_player_id = None
+        
+        for p in tracked_players:
+            if 'bbox' not in p or not p['bbox']:
+                continue
+            player_bbox = p['bbox']
+            player_center = [(player_bbox[0] + player_bbox[2]) / 2, (player_bbox[1] + player_bbox[3]) / 2]
+            distance = ((action_center[0] - player_center[0])**2 + (action_center[1] - player_center[1])**2)**0.5
+            
+            # 計算動作框的對角線長度作為參考距離
+            action_diagonal = ((action_bbox[2] - action_bbox[0])**2 + (action_bbox[3] - action_bbox[1])**2)**0.5
+            
+            # 如果距離小於動作框對角線的1.5倍，認為是匹配的
+            if distance < action_diagonal * 1.5 and distance < min_distance:
+                min_distance = distance
+                closest_player_id = p['id']
+        
+        return closest_player_id
 
     def analyze_video(self, video_path: str, output_path: str = None) -> dict:
         """
@@ -442,6 +487,62 @@ class VolleyballAnalyzer:
         frame_count = 0
         start_time = time.time()
         
+        # 動作合併追蹤：{(player_id, action_type): current_action_data}
+        # current_action_data = {
+        #   "start_frame": int,
+        #   "end_frame": int,
+        #   "start_timestamp": float,
+        #   "end_timestamp": float,
+        #   "bbox": [x1, y1, x2, y2],
+        #   "max_confidence": float,
+        #   "frame_count": int,  # 連續檢測到的幀數
+        #   "last_seen_frame": int  # 最後一次檢測到的幀
+        # }
+        active_actions: Dict[Tuple[int, str], Dict] = {}
+        
+        # 動作合併參數
+        MIN_ACTION_FRAMES = 3  # 最小動作持續時間（幀數）
+        MAX_GAP_FRAMES = 5  # 最大間隔幀數（超過此幀數認為動作結束）
+        
+        def finalize_action(key: Tuple[int, str], current_frame: int, current_timestamp: float):
+            """完成並保存一個動作"""
+            if key not in active_actions:
+                return
+            
+            action_data = active_actions[key]
+            player_id, action_type = key
+            
+            # 只有當動作持續時間足夠長時才保存
+            if action_data["frame_count"] >= MIN_ACTION_FRAMES:
+                final_action = {
+                    "frame": action_data["start_frame"],  # 使用開始幀
+                    "timestamp": action_data["start_timestamp"],  # 使用開始時間
+                    "end_frame": action_data["end_frame"],
+                    "end_timestamp": action_data["end_timestamp"],
+                    "bbox": action_data["bbox"],
+                    "confidence": action_data["max_confidence"],  # 使用最大置信度
+                    "action": action_type,
+                    "player_id": player_id if player_id is not None else None,
+                    "duration": action_data["end_timestamp"] - action_data["start_timestamp"]  # 動作持續時間
+                }
+                results["action_recognition"]["actions"].append(final_action)
+                
+                # 統計動作數量
+                if action_type not in results["action_recognition"]["action_counts"]:
+                    results["action_recognition"]["action_counts"][action_type] = 0
+                results["action_recognition"]["action_counts"][action_type] += 1
+                
+                # 若此action=得分，可加score event
+                if action_type in ["score", "spike_score", "attack_score"]:
+                    results["scores"].append({
+                        "player_id": player_id,
+                        "frame": action_data["start_frame"],
+                        "timestamp": action_data["start_timestamp"],
+                        "score_type": action_type
+                    })
+            
+            del active_actions[key]
+        
         try:
             while True:
                 ret, frame = cap.read()
@@ -477,33 +578,50 @@ class VolleyballAnalyzer:
                     })
                     results["ball_tracking"]["detected_frames"] += 1
                 
-                # ----- 動作偵測並關聯球員id -----
+                # ----- 動作偵測並關聯球員id，合併連續動作 -----
                 actions = self.detect_actions(frame)
+                detected_action_keys = set()
+                
                 for action in actions:
                     pid = self.assign_action_to_player(action["bbox"], tracked_players)
-                    action_data = {
-                        "frame": int(frame_count),
-                        "timestamp": timestamp,
-                        "bbox": action["bbox"],
-                        "confidence": action["confidence"],
-                        "action": action["action"],
-                        "player_id": int(pid) if pid is not None else None
-                    }
-                    results["action_recognition"]["actions"].append(action_data)
-                    # 若此action=得分，可加score event
-                    if action["action"] in ["score", "spike_score", "attack_score"]:
-                        results["scores"].append({
-                            "player_id": action_data["player_id"],
-                            "frame": int(frame_count),
-                            "timestamp": timestamp,
-                            "score_type": action["action"]
-                        })
+                    player_id = int(pid) if pid is not None else None
+                    action_type = action["action"]
+                    key = (player_id, action_type)
+                    detected_action_keys.add(key)
                     
-                    # 統計動作數量
-                    action_name = action["action"]
-                    if action_name not in results["action_recognition"]["action_counts"]:
-                        results["action_recognition"]["action_counts"][action_name] = 0
-                    results["action_recognition"]["action_counts"][action_name] += 1
+                    if key in active_actions:
+                        # 更新現有動作：延長結束時間
+                        active_actions[key]["end_frame"] = int(frame_count)
+                        active_actions[key]["end_timestamp"] = timestamp
+                        active_actions[key]["frame_count"] += 1
+                        active_actions[key]["last_seen_frame"] = int(frame_count)
+                        # 更新最大置信度和bbox（使用最新的）
+                        if action["confidence"] > active_actions[key]["max_confidence"]:
+                            active_actions[key]["max_confidence"] = action["confidence"]
+                            active_actions[key]["bbox"] = action["bbox"]
+                    else:
+                        # 開始新動作
+                        active_actions[key] = {
+                            "start_frame": int(frame_count),
+                            "end_frame": int(frame_count),
+                            "start_timestamp": timestamp,
+                            "end_timestamp": timestamp,
+                            "bbox": action["bbox"],
+                            "max_confidence": action["confidence"],
+                            "frame_count": 1,
+                            "last_seen_frame": int(frame_count)
+                        }
+                
+                # 檢查並完成中斷的動作（超過最大間隔幀數沒有檢測到）
+                keys_to_finalize = []
+                for key in active_actions:
+                    if key not in detected_action_keys:
+                        gap = frame_count - active_actions[key]["last_seen_frame"]
+                        if gap > MAX_GAP_FRAMES:
+                            keys_to_finalize.append(key)
+                
+                for key in keys_to_finalize:
+                    finalize_action(key, frame_count, timestamp)
                 
                 # ----- 簡單的遊戲狀態判斷：有動作時為Play，否則為No-Play -----
                 # 這是一個簡化實現，實際可以根據動作類型、球位置等更精確判斷
@@ -529,6 +647,11 @@ class VolleyballAnalyzer:
                     progress = (frame_count / total_frames) * 100
                     elapsed = time.time() - start_time
                     print(f"⏳ 進度: {progress:.1f}% ({frame_count}/{total_frames}) - {elapsed:.1f}s")
+            
+            # 視頻處理完成，完成所有未完成的動作
+            final_timestamp = float(frame_count) / fps_scalar if frame_count > 0 else 0.0
+            for key in list(active_actions.keys()):
+                finalize_action(key, frame_count, final_timestamp)
         
         finally:
             cap.release()
