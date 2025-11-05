@@ -105,6 +105,16 @@ export interface AnalysisResults {
     action_counts: Record<string, number>;
     total_actions: number;
   };
+  plays?: Array<{
+    play_id: number;
+    start_frame: number;
+    start_timestamp: number;
+    end_frame: number;
+    end_timestamp: number;
+    duration: number;
+    actions: any[];
+    scores: any[];
+  }>;
   analysis_time: number;
 }
 
@@ -164,6 +174,36 @@ export const apiService = {
     return response.data;
   },
 
+  // 刪除視頻
+  async deleteVideo(videoId: string) {
+    const response = await api.delete(`/videos/${videoId}`);
+    return response.data;
+  },
+
+  // 設置球衣號碼映射
+  async setJerseyMapping(videoId: string, trackId: number, jerseyNumber: number, frame: number, bbox: number[]) {
+    const response = await api.post(`/videos/${videoId}/jersey-mapping`, {
+      video_id: videoId,
+      track_id: trackId,
+      jersey_number: jerseyNumber,
+      frame: frame,
+      bbox: bbox
+    });
+    return response.data;
+  },
+
+  // 獲取球衣號碼映射
+  async getJerseyMappings(videoId: string) {
+    const response = await api.get(`/videos/${videoId}/jersey-mappings`);
+    return response.data;
+  },
+
+  // 刪除球衣號碼映射
+  async deleteJerseyMapping(videoId: string, trackId: string) {
+    const response = await api.delete(`/videos/${videoId}/jersey-mapping/${trackId}`);
+    return response.data;
+  },
+
   // 播放影片
   getVideoUrl(videoId: string) {
     return `${API_BASE_URL}/play/${videoId}`;
@@ -179,5 +219,9 @@ export const getAnalysisStatus = apiService.getAnalysisStatus;
 export const getAnalysisResults = apiService.getAnalysisResults;
 export const getVideoUrl = apiService.getVideoUrl;
 export const updateVideoName = apiService.updateVideoName;
+export const deleteVideo = apiService.deleteVideo;
+export const setJerseyMapping = apiService.setJerseyMapping;
+export const getJerseyMappings = apiService.getJerseyMappings;
+export const deleteJerseyMapping = apiService.deleteJerseyMapping;
 
 export default apiService;

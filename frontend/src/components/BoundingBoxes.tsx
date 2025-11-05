@@ -9,6 +9,8 @@ interface BoundingBoxesProps {
   showPlayers?: boolean;
   showActions?: boolean;
   playerNames?: Record<number, string>;
+  onPlayerClick?: (player: any, event: React.MouseEvent) => void;  // 新增：點擊回調
+  jerseyMappings?: Record<string, any>;  // 新增：球衣號碼映射
 }
 
 const getPlayerColor = (playerId: number): string => {
@@ -44,7 +46,9 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
   videoSize,
   showPlayers = true,
   showActions = true,
-  playerNames = {}
+  playerNames = {},
+  onPlayerClick,
+  jerseyMappings = {}
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -96,23 +100,31 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
           if (!player.bbox || !Array.isArray(player.bbox) || player.bbox.length < 4) return;
           
           const [x1, y1, x2, y2] = player.bbox;
-          const color = getPlayerColor(player.id || 0);
+          const playerId = player.id || player.stable_id || 0;
+          const color = getPlayerColor(playerId);
           
-          // Draw bounding box
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 2;
-          ctx.setLineDash([]);
+          // 檢查是否有球衣號碼映射
+          const trackIdStr = String(player.id || playerId);
+          const jerseyMapping = jerseyMappings[trackIdStr];
+          const jerseyNumber = jerseyMapping?.jersey_number || player.jersey_number || null;
+          
+          // Draw bounding box（如果已標記，使用不同的樣式）
+          ctx.strokeStyle = jerseyNumber ? '#10B981' : color;  // 已標記用綠色
+          ctx.lineWidth = jerseyNumber ? 3 : 2;
+          ctx.setLineDash(jerseyNumber ? [] : [5, 5]);  // 未標記用虛線
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
           // Draw label background
-          const label = getPlayerName(player.id || 0);
+          const label = jerseyNumber 
+            ? `#${jerseyNumber}` 
+            : (getPlayerName(playerId) || `ID: ${playerId}`);
           ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
           ctx.textBaseline = 'top';
           const textMetrics = ctx.measureText(label);
           const textWidth = textMetrics.width;
           const textHeight = 18;
 
-          ctx.fillStyle = color;
+          ctx.fillStyle = jerseyNumber ? '#10B981' : color;
           ctx.fillRect(x1, y1 - textHeight - 2, textWidth + 8, textHeight);
 
           // Draw label text
@@ -163,20 +175,25 @@ export const BoundingBoxes: React.FC<BoundingBoxesProps> = ({
         ctx.fillText(label, x1 + 4, y1 - textHeight + 2);
       });
     }
-  }, [playerTracks, actions, currentTime, fps, videoSize, showPlayers, showActions, playerNames]);
+  }, [playerTracks, actions, currentTime, fps, videoSize, showPlayers, showActions, playerNames, jerseyMappings]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={videoSize.width || 640}
-      height={videoSize.height || 360}
-      className="absolute left-0 top-0 pointer-events-none"
-      style={{ 
-        imageRendering: 'crisp-edges',
-        width: '100%',
-        height: 'auto'
-      }}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        width={videoSize.width || 640}
+        height={videoSize.height || 360}
+        className="absolute left-0 top-0 pointer-events-none"
+        style={{ 
+          imageRendering: 'crisp-edges',
+          width: '100%',
+          height: 'auto',
+          zIndex: 10,
+          pointerEvents: 'none'  // 確保 canvas 不會阻擋點擊
+        }}
+      />
+      {/* 移除 overlay div，改為在父組件中處理點擊事件 */}
+    </>
   );
 };
 

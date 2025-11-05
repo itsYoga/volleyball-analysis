@@ -1,16 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getVideoUrl, getAnalysisResults, getVideo, getAnalysisStatus } from '../services/api';
+import { getVideoUrl, getAnalysisResults, getVideo, getAnalysisStatus, setJerseyMapping, getJerseyMappings } from '../services/api';
 import { EventTimeline } from './EventTimeline';
 import { PlayerHeatmap } from './PlayerHeatmap';
 import { BoundingBoxes } from './BoundingBoxes';
 import { BallTracking } from './BallTracking';
 import { PlayerStats } from './PlayerStats';
+import { PlaySelector } from './PlaySelector';
+import { PlayerTaggingDialog } from './PlayerTaggingDialog';
 import { Loader2, AlertCircle, Clock, RefreshCw, ArrowLeft, PlayCircle, Users, Maximize2, Minimize2 } from 'lucide-react';
 
 export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   const params = useParams();
-  const effectiveId = videoId && videoId.length > 0 ? videoId : (params.videoId as string);
+  // 優先使用 props 中的 videoId，如果沒有則使用路由參數
+  const effectiveId = videoId || params.videoId || '';
+  
+  console.log('VideoPlayer render:', { videoId, paramsVideoId: params.videoId, effectiveId });
   const [result, setResult] = useState<any>(null);
   const [status, setStatus] = useState<'idle'|'loading'|'processing'|'completed'|'failed'|'error'>('idle');
   const [error, setError] = useState<string>('');
@@ -20,9 +25,12 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   const [showActionBoxes, setShowActionBoxes] = useState<boolean>(true);
   const [showBallTracking, setShowBallTracking] = useState<boolean>(false);
   const [showPlayerStats, setShowPlayerStats] = useState<boolean>(false);
+  const [showPlaySelector, setShowPlaySelector] = useState<boolean>(true);
   const [playerNames, setPlayerNames] = useState<Record<number, string>>({});
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
+  const [selectedPlayer, setSelectedPlayer] = useState<any | null>(null);  // 選中的玩家（用於標記）
+  const [jerseyMappings, setJerseyMappings] = useState<Record<string, any>>({});  // 球衣號碼映射
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
 
@@ -49,7 +57,16 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
   };
 
   useEffect(() => {
-    if (!effectiveId) return;
+    console.log('VideoPlayer useEffect triggered:', { videoId, paramsVideoId: params.videoId, effectiveId });
+    
+    if (!effectiveId) {
+      console.error('VideoPlayer: No effectiveId, cannot load video');
+      setStatus('error');
+      setError('未提供視頻 ID');
+      return;
+    }
+    
+    console.log('VideoPlayer: Starting to load video:', effectiveId);
     let isMounted = true;
     let pollInterval: NodeJS.Timeout | null = null;
     
@@ -57,7 +74,9 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
       setStatus('loading');
       setError('');
       try {
+        console.log('VideoPlayer: Fetching video metadata for:', effectiveId);
         const meta = await getVideo(effectiveId);
+        console.log('VideoPlayer: Video metadata received:', meta);
         if (!isMounted) return;
         if (meta.status !== 'completed') {
           setStatus(meta.status as any);
@@ -103,11 +122,23 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
           }
           return;
         }
+        console.log('VideoPlayer: Fetching analysis results for:', effectiveId);
         const res = await getAnalysisResults(effectiveId);
         if (!isMounted) return;
+        console.log('VideoPlayer: Analysis results received');
         setResult(res);
         setStatus('completed');
         setProgress(100);
+        
+        // 載入球衣號碼映射
+        try {
+          const mappingsRes = await getJerseyMappings(effectiveId);
+          if (mappingsRes.mappings) {
+            setJerseyMappings(mappingsRes.mappings);
+          }
+        } catch (e) {
+          console.error('Failed to load jersey mappings:', e);
+        }
       } catch (e: any) {
         setError(e?.message || 'Failed to load analysis results');
         setStatus('error');
@@ -120,13 +151,55 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
         clearInterval(pollInterval);
       }
     };
-  }, [effectiveId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveId]); // effectiveId 已經包含了 videoId 和 params.videoId 的邏輯
 
   const handleSeek = (sec: number) => {
     if (videoRef.current) {
       videoRef.current.currentTime = sec;
       // Force update currentTime immediately
       setCurrentTime(sec);
+    }
+  };
+
+  // 處理玩家框點擊
+  const handlePlayerClick = (player: any, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setSelectedPlayer(player);
+  };
+
+  // 確認標記球衣號碼
+  const handleConfirmJerseyNumber = async (jerseyNumber: number) => {
+    if (!selectedPlayer || !effectiveId || !result) return;
+    
+    try {
+      const trackId = selectedPlayer.id || selectedPlayer.stable_id;
+      const video_info = result.video_info || {};
+      const fps = video_info.fps || 30;
+      const currentFrame = Math.round(currentTime * fps);
+      
+      await setJerseyMapping(
+        effectiveId,
+        trackId,
+        jerseyNumber,
+        currentFrame,
+        selectedPlayer.bbox || []
+      );
+      
+      // 更新本地映射狀態
+      setJerseyMappings(prev => ({
+        ...prev,
+        [String(trackId)]: {
+          jersey_number: jerseyNumber,
+          frame: currentFrame,
+          bbox: selectedPlayer.bbox
+        }
+      }));
+      
+      setSelectedPlayer(null);
+    } catch (error) {
+      console.error('Failed to set jersey mapping:', error);
+      alert('標記失敗，請重試');
     }
   };
 
@@ -365,9 +438,12 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
     );
   }
 
-  if (!result) return null;
+  if (!result) {
+    // 如果沒有結果，返回 null（前面的狀態檢查已經處理了所有情況）
+    return null;
+  }
 
-  const { action_recognition, scores, players_tracking, game_states, video_info, ball_tracking } = result;
+  const { action_recognition, scores, players_tracking, game_states, video_info, ball_tracking, plays } = result;
   const fps = video_info?.fps || 30;
   const totalFrames = video_info?.total_frames || Math.round((video_info?.duration || 0) * fps) || 1000;
   const currentFrame = Math.max(0, Math.min(totalFrames, Math.round(currentTime * fps)));
@@ -434,6 +510,15 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
             <label className={`flex items-center gap-2 cursor-pointer ${isFullscreen ? 'text-white' : ''}`}>
               <input
                 type="checkbox"
+                checked={showPlaySelector}
+                onChange={(e) => setShowPlaySelector(e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+              />
+              <span className={`text-sm font-medium ${isFullscreen ? 'text-white' : 'text-gray-700'}`}>Show Play Selector</span>
+            </label>
+            <label className={`flex items-center gap-2 cursor-pointer ${isFullscreen ? 'text-white' : ''}`}>
+              <input
+                type="checkbox"
                 checked={showPlayerStats}
                 onChange={(e) => setShowPlayerStats(e.target.checked)}
                 className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
@@ -443,19 +528,122 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
           </div>
 
           <div className="relative w-full bg-black rounded-xl overflow-hidden shadow-2xl" ref={videoContainerRef}>
-            <div className="relative w-full" style={{ position: 'relative' }}>
-              <video
-                ref={videoRef}
-                src={getVideoUrl(effectiveId)}
-                controls
-                className="w-full h-auto"
-                style={{ display: 'block' }}
-                onLoadedMetadata={(e) => {
-                  // Update currentTime when video metadata loads
-                  const video = e.target as HTMLVideoElement;
-                  setCurrentTime(video.currentTime || 0);
-                }}
-              />
+            <div className="relative w-full" style={{ position: 'relative', minHeight: '400px' }}>
+              {effectiveId ? (
+                <>
+                  <video
+                    key={effectiveId}  // 添加 key 確保重新渲染
+                    ref={videoRef}
+                    src={getVideoUrl(effectiveId)}
+                    controls
+                    className="w-full h-auto max-w-full"
+                    style={{ display: 'block', zIndex: 1, width: '100%', height: 'auto', position: 'relative' }}
+                    preload="auto"
+                    playsInline
+                    autoPlay={false}
+                    muted={false}
+                    onLoadedMetadata={(e) => {
+                      console.log('Video metadata loaded, duration:', (e.target as HTMLVideoElement).duration);
+                      const video = e.target as HTMLVideoElement;
+                      setCurrentTime(video.currentTime || 0);
+                    }}
+                    onLoadedData={(e) => {
+                      console.log('Video data loaded');
+                      const video = e.target as HTMLVideoElement;
+                      console.log('Video readyState:', video.readyState);
+                      console.log('Video networkState:', video.networkState);
+                    }}
+                    onCanPlay={() => {
+                      console.log('Video can play');
+                    }}
+                    onCanPlayThrough={() => {
+                      console.log('Video can play through');
+                    }}
+                    onPlay={() => {
+                      console.log('Video started playing');
+                    }}
+                    onPause={() => {
+                      console.log('Video paused');
+                    }}
+                    onWaiting={() => {
+                      console.log('Video waiting for data');
+                    }}
+                    onStalled={() => {
+                      console.log('Video stalled');
+                    }}
+                    onClick={(e) => {
+                      console.log('Video clicked', e);
+                      // 如果啟用了玩家框顯示，檢查是否點擊在玩家框內
+                      if (showPlayerBoxes && result && handlePlayerClick) {
+                        const video = e.currentTarget as HTMLVideoElement;
+                        const rect = video.getBoundingClientRect();
+                        const video_info = result.video_info || {};
+                        const fps = video_info.fps || 30;
+                        const videoWidth = video_info.width || video.videoWidth || rect.width;
+                        const videoHeight = video_info.height || video.videoHeight || rect.height;
+                        const scaleX = videoWidth / rect.width;
+                        const scaleY = videoHeight / rect.height;
+                        
+                        const clickX = (e.clientX - rect.left) * scaleX;
+                        const clickY = (e.clientY - rect.top) * scaleY;
+                        
+                        const currentFrame = Math.round(currentTime * fps);
+                        const players_tracking = result.players_tracking || [];
+                        
+                        const currentTrack = players_tracking.find(
+                          (track: any) => track.frame === currentFrame
+                        ) || players_tracking.reduce((closest: any, track: any) => {
+                          if (!closest) return track;
+                          const closestDiff = Math.abs(closest.frame - currentFrame);
+                          const trackDiff = Math.abs(track.frame - currentFrame);
+                          return trackDiff < closestDiff ? track : closest;
+                        }, null as any);
+                        
+                        // 檢查是否點擊在玩家框內
+                        if (currentTrack && currentTrack.players && Math.abs(currentTrack.frame - currentFrame) <= 15) {
+                          for (const player of currentTrack.players) {
+                            if (!player.bbox || !Array.isArray(player.bbox) || player.bbox.length < 4) continue;
+                            const [x1, y1, x2, y2] = player.bbox;
+                            if (clickX >= x1 && clickX <= x2 && clickY >= y1 && clickY <= y2) {
+                              // 點擊在玩家框內，處理玩家點擊事件
+                              handlePlayerClick(player, e);
+                              e.stopPropagation();
+                              return;
+                            }
+                          }
+                        }
+                      }
+                      // 如果沒有點擊在玩家框內，讓視頻控件正常處理點擊
+                    }}
+                    onError={(e) => {
+                      console.error('Video load error:', e);
+                      const video = e.target as HTMLVideoElement;
+                      const errorMsg = video.error 
+                        ? `Code ${video.error.code}: ${video.error.message || 'Unknown error'}`
+                        : 'Unknown error';
+                      console.error('Video error details:', {
+                        error: video.error,
+                        code: video.error?.code,
+                        message: video.error?.message,
+                        src: video.src,
+                        effectiveId: effectiveId,
+                        networkState: video.networkState,
+                        readyState: video.readyState
+                      });
+                      setError(`無法載入視頻: ${errorMsg}`);
+                    }}
+                  />
+                  {error && (
+                    <div className="absolute top-0 left-0 right-0 bg-red-500 text-white p-2 text-sm z-50">
+                      {error}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="w-full h-64 bg-gray-900 flex items-center justify-center text-white">
+                  <p>無效的視頻 ID (effectiveId: {effectiveId || 'undefined'})</p>
+                </div>
+              )}
               {/* Fullscreen Toggle Button */}
               <button
                 onClick={toggleFullscreen}
@@ -465,7 +653,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                 {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
               </button>
               {/* Bounding Boxes Overlay */}
-              {(showPlayerBoxes || showActionBoxes) && (
+              {(showPlayerBoxes || showActionBoxes) && result && (
                 <BoundingBoxes
                   playerTracks={players_tracking || []}
                   actions={action_recognition?.action_detections || []}  // 使用 action_detections 來顯示每一幀的動態框
@@ -475,10 +663,12 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                   showPlayers={showPlayerBoxes}
                   showActions={showActionBoxes}
                   playerNames={playerNames}
+                  onPlayerClick={handlePlayerClick}
+                  jerseyMappings={jerseyMappings}
                 />
               )}
               {/* Heatmap Overlay (optional, less intrusive) */}
-              {showHeatmap && (
+              {showHeatmap && result && (
                 <PlayerHeatmap 
                   playerTracks={players_tracking || []} 
                   videoSize={{ width: video_info?.width || 640, height: video_info?.height || 360 }} 
@@ -488,7 +678,7 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                 />
               )}
               {/* Ball Tracking Overlay */}
-              {showBallTracking && (
+              {showBallTracking && result && (
                 <BallTracking
                   ballTrajectory={ball_tracking?.trajectory || []}
                   currentTime={currentTime}
@@ -516,8 +706,21 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
                 onSeek={handleSeek}
                 onPlayerNameChange={handlePlayerNameChange}
                 playerNames={playerNames}
+                jerseyMappings={jerseyMappings}
               />
             </div>
+          </div>
+        )}
+
+        {/* Play Selector */}
+        {showPlaySelector && (
+          <div className={`px-6 pb-6 ${isFullscreen ? '' : ''}`}>
+            <PlaySelector
+              plays={plays || []}
+              currentTime={currentTime}
+              fps={fps}
+              onSeek={handleSeek}
+            />
           </div>
         )}
 
@@ -536,10 +739,22 @@ export const VideoPlayer: React.FC<{ videoId?: string }> = ({ videoId }) => {
               onSeek={handleSeek}
               fps={fps}
               playerNames={playerNames}
+              playerTracks={players_tracking || []}
+              jerseyMappings={jerseyMappings}
             />
           </div>
         </div>
       </div>
+
+      {/* Player Tagging Dialog */}
+      {selectedPlayer && (
+        <PlayerTaggingDialog
+          player={selectedPlayer}
+          currentFrame={Math.round(currentTime * fps)}
+          onClose={() => setSelectedPlayer(null)}
+          onConfirm={handleConfirmJerseyNumber}
+        />
+      )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Zap, Hand, Shield, Target, Box, Trophy } from 'lucide-react';
 
 interface Props {
@@ -10,6 +10,8 @@ interface Props {
   onSeek: (sec: number) => void;
   fps?: number; // frames per second for time conversion
   playerNames?: Record<number, string>;
+  playerTracks?: any[]; // 新增：用於 OCR 映射
+  jerseyMappings?: Record<string, any>;  // 手動標記的球衣號碼映射
 }
 
 const getActionIcon = (action?: string) => {
@@ -55,12 +57,94 @@ export const EventTimeline: React.FC<Props> = ({
   currentFrame = 0, 
   onSeek,
   fps = 30,
-  playerNames = {}
+  playerNames = {},
+  playerTracks = [],
+  jerseyMappings = {}
 }) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = React.useState(false);
 
+  // 創建 track_id 到 jersey_number 的映射（與 PlayerStats 相同的邏輯）
+  const trackIdToJerseyMap = useMemo(() => {
+    const jerseyCounts: Record<number, Record<number, number>> = {};
+    
+    playerTracks.forEach((track: any) => {
+      if (track.players) {
+        track.players.forEach((player: any) => {
+          const trackId = player.id;
+          const jerseyNumber = player.jersey_number;
+          
+          if (jerseyNumber !== undefined && jerseyNumber !== null && jerseyNumber !== trackId) {
+            if (!jerseyCounts[trackId]) {
+              jerseyCounts[trackId] = {};
+            }
+            jerseyCounts[trackId][jerseyNumber] = (jerseyCounts[trackId][jerseyNumber] || 0) + 1;
+          }
+        });
+      }
+    });
+    
+    const map: Record<number, number> = {};
+    Object.keys(jerseyCounts).forEach(trackIdStr => {
+      const trackId = Number(trackIdStr);
+      const counts = jerseyCounts[trackId];
+      
+      let maxCount = 0;
+      let mostCommonJersey: number | null = null;
+      
+      Object.keys(counts).forEach(jerseyStr => {
+        const jersey = Number(jerseyStr);
+        const count = counts[jersey];
+        if (count > maxCount) {
+          maxCount = count;
+          mostCommonJersey = jersey;
+        }
+      });
+      
+      if (mostCommonJersey !== null) {
+        map[trackId] = mostCommonJersey;
+      }
+    });
+    
+    // 合併手動標記的球衣號碼映射（優先級最高）
+    Object.keys(jerseyMappings).forEach(trackIdStr => {
+      const trackId = Number(trackIdStr);
+      const mapping = jerseyMappings[trackIdStr];
+      if (mapping && mapping.jersey_number !== undefined && mapping.jersey_number !== null) {
+        map[trackId] = mapping.jersey_number;
+      }
+    });
+    
+    return map;
+  }, [playerTracks, jerseyMappings]);
+
   const getPlayerName = (playerId: number): string => {
+    // 先檢查手動標記的映射（優先級最高）
+    for (const trackIdStr of Object.keys(jerseyMappings)) {
+      const trackId = Number(trackIdStr);
+      const mapping = jerseyMappings[trackIdStr];
+      if (mapping && mapping.jersey_number === playerId) {
+        return `#${playerId}`;
+      }
+      if (trackId === playerId && mapping && mapping.jersey_number !== undefined && mapping.jersey_number !== null) {
+        return `#${mapping.jersey_number}`;
+      }
+    }
+    
+    // 檢查 playerId 是否在 trackIdToJerseyMap 的值中（是 jersey_number）
+    const isJerseyNumber = Object.values(trackIdToJerseyMap).includes(playerId);
+    
+    // 如果 playerId 是 jersey_number，顯示為 #X
+    if (isJerseyNumber) {
+      return `#${playerId}`;
+    }
+    
+    // 如果這個 track_id 有對應的 jersey_number，使用 jersey_number
+    if (trackIdToJerseyMap[playerId]) {
+      return `#${trackIdToJerseyMap[playerId]}`;
+    }
+    
+    // 否則顯示 Player #X 或自定義名稱
     return playerNames[playerId] || `Player #${playerId}`;
   };
 

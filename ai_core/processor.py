@@ -15,6 +15,12 @@ import onnxruntime as ort
 from ultralytics import YOLO
 import time
 import norfair
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    print("⚠️  EasyOCR 未安裝，球衣號碼識別功能將不可用。安裝方式: pip install easyocr")
 
 # 添加項目根目錄到路徑
 sys.path.append(str(Path(__file__).parent.parent))
@@ -53,13 +59,23 @@ class VolleyballAnalyzer:
             self.load_player_model(player_model_path)
         
         # 新增追蹤器實例 - 使用 bbox 模式（類似 volleyball_analytics-main）
-        # 雖然使用 bbox 兩個點，但 distance_function 仍使用 "euclidean"（與 volleyball_analytics-main 一致）
+        # 優化參數以減少ID碎片化：
+        # - 增加 distance_threshold：允許更大的距離變化（玩家移動）
+        # - 增加 hit_counter_max：需要更多次檢測才認為追蹤穩定
+        # - 增加 initialization_delay：延遲初始化，減少短暫誤檢測
         self.tracker = norfair.Tracker(
             distance_function="euclidean",  # 使用 euclidean 距離函數（與 volleyball_analytics-main 一致）
-            distance_threshold=50,  # euclidean 距離閾值（像素）
-            initialization_delay=1,
-            hit_counter_max=10
+            distance_threshold=100,  # 增加到100像素，允許更大的移動範圍
+            initialization_delay=3,  # 增加到3幀，減少短暫誤檢測
+            hit_counter_max=15  # 增加到15，需要更多連續檢測才認為追蹤穩定
         )
+        
+        # 球衣號碼OCR相關
+        self.jersey_number_model = None
+        self.jersey_number_cache = {}  # 緩存 (track_id, bbox) -> jersey_number
+        self.jersey_to_stable_id = {}  # 球衣號碼 -> 穩定ID映射
+        self.next_stable_id = 1  # 下一個穩定ID
+        self.track_id_to_jersey_history = {}  # 追蹤ID -> [jersey_numbers] 歷史記錄（用於多幀融合）
     
     def load_ball_model(self, model_path: str):
         """載入球追蹤模型 (ONNX)"""
@@ -373,13 +389,17 @@ class VolleyballAnalyzer:
                 self._ball_error_count += 1
             return None
     
-    def track_players(self, players):
+    def track_players(self, players, frame: Optional[np.ndarray] = None):
         """
         追蹤球員 - 使用 bbox 模式（類似 volleyball_analytics-main）
         players = [{bbox:..., confidence:...}]
         
         使用 bbox 的兩個點（左上角和右下角）來創建 norfair Detection
         這樣可以使用 IOU 距離函數來追蹤，更準確地保留 bbox 信息
+        
+        Args:
+            players: 檢測到的玩家列表
+            frame: 當前幀圖像（用於球衣號碼OCR，可選）
         """
         if not players:
             return []
@@ -546,13 +566,178 @@ class VolleyballAnalyzer:
             else:
                 final_bbox = [0.0, 0.0, 80.0, 160.0]
             
+            # 獲取穩定ID和球衣號碼（分開處理）
+            stable_id, jersey_num = self._get_stable_player_id(int(t.id), final_bbox, frame) if frame is not None else (int(t.id), None)
+            
             output.append({
-                'id': int(t.id),
+                'id': int(t.id),  # Norfair追蹤ID（保留用於後續處理）
+                'stable_id': stable_id,  # 穩定ID（基於球衣號碼或追蹤ID）
                 'bbox': final_bbox,
-                'confidence': conf_to_use
+                'confidence': conf_to_use,
+                'jersey_number': jersey_num  # 只有OCR真正檢測到球衣號碼時才設置
             })
         
         return output
+    
+    def _get_stable_player_id(self, track_id: int, bbox: List[float], frame: np.ndarray) -> Tuple[int, Optional[int]]:
+        """
+        獲取穩定的玩家ID和球衣號碼（分開返回）
+        
+        Returns:
+            (stable_id, jersey_number): 
+            - stable_id: 穩定ID（基於球衣號碼或追蹤ID）
+            - jersey_number: 球衣號碼（如果OCR檢測到），否則None
+        """
+        jersey_num = None
+        
+        # 檢查緩存
+        cache_key = (track_id, tuple(bbox))
+        if cache_key in self.jersey_number_cache:
+            jersey_num = self.jersey_number_cache[cache_key]
+            if jersey_num and jersey_num in self.jersey_to_stable_id:
+                return (self.jersey_to_stable_id[jersey_num], jersey_num)
+        
+        # 嘗試OCR識別球衣號碼（每10幀執行一次，避免太慢）
+        if EASYOCR_AVAILABLE and frame is not None and track_id % 10 == 0:
+            jersey_num = self._detect_jersey_number(frame, bbox, track_id)
+            if jersey_num:
+                self.jersey_number_cache[cache_key] = jersey_num
+                if jersey_num not in self.jersey_to_stable_id:
+                    self.jersey_to_stable_id[jersey_num] = jersey_num
+                return (jersey_num, jersey_num)  # 如果檢測到球衣號碼，stable_id 和 jersey_number 都是球衣號碼
+        
+        # 如果沒有檢測到球衣號碼，stable_id 使用追蹤ID，jersey_number 為 None
+        return (track_id, None)
+    
+    def _detect_jersey_number(self, frame: np.ndarray, bbox: List[float], track_id: int = None) -> Optional[int]:
+        """
+        使用OCR識別球衣號碼（改進版：包含圖像預處理和多幀融合）
+        
+        Args:
+            frame: 完整幀圖像
+            bbox: 玩家邊界框 [x1, y1, x2, y2]
+            track_id: 追蹤ID（用於多幀融合）
+            
+        Returns:
+            球衣號碼（如果識別成功），否則None
+        """
+        if not EASYOCR_AVAILABLE:
+            return None
+        
+        try:
+            # 提取玩家區域（主要關注上半身，球衣號碼通常在胸部）
+            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            height = y2 - y1
+            
+            # 提取上半身區域（上半部分，球衣號碼在這裡）
+            roi_top = max(0, y1)
+            roi_bottom = min(frame.shape[0], y1 + int(height * 0.6))  # 上半身60%
+            roi_left = max(0, x1)
+            roi_right = min(frame.shape[1], x2)
+            
+            if roi_bottom <= roi_top or roi_right <= roi_left:
+                return None
+            
+            roi = frame[roi_top:roi_bottom, roi_left:roi_right].copy()
+            
+            if roi.size == 0:
+                return None
+            
+            # 圖像預處理改進
+            roi = self._preprocess_roi(roi)
+            
+            # 初始化EasyOCR（僅初始化一次）
+            if self.jersey_number_model is None:
+                self.jersey_number_model = easyocr.Reader(['en'], gpu=False)
+            
+            # OCR識別
+            results = self.jersey_number_model.readtext(roi)
+            
+            # 提取數字
+            detected_numbers = []
+            for detection in results:
+                text = detection[1].strip()
+                # 嘗試提取數字（1-99）
+                numbers = ''.join(c for c in text if c.isdigit())
+                if numbers:
+                    num = int(numbers)
+                    if 1 <= num <= 99:  # 合理的球衣號碼範圍
+                        detected_numbers.append(num)
+            
+            # 多幀融合：如果提供了track_id，記錄歷史並投票
+            if track_id is not None and detected_numbers:
+                if track_id not in self.track_id_to_jersey_history:
+                    self.track_id_to_jersey_history[track_id] = []
+                
+                # 記錄本次識別結果
+                self.track_id_to_jersey_history[track_id].extend(detected_numbers)
+                
+                # 只保留最近50次識別結果（避免內存過大）
+                if len(self.track_id_to_jersey_history[track_id]) > 50:
+                    self.track_id_to_jersey_history[track_id] = self.track_id_to_jersey_history[track_id][-50:]
+                
+                # 投票：返回最常見的號碼（如果出現次數 >= 2）
+                from collections import Counter
+                counter = Counter(self.track_id_to_jersey_history[track_id])
+                if counter:
+                    most_common = counter.most_common(1)[0]
+                    if most_common[1] >= 2:  # 至少出現2次才認為可靠
+                        return most_common[0]
+            
+            # 如果沒有多幀融合或未達到閾值，返回第一個檢測到的號碼
+            return detected_numbers[0] if detected_numbers else None
+            
+        except Exception as e:
+            # 靜默失敗，不影響主流程
+            return None
+    
+    def _preprocess_roi(self, roi: np.ndarray) -> np.ndarray:
+        """
+        圖像預處理：增強對比度、銳化等
+        
+        Args:
+            roi: 輸入ROI圖像
+            
+        Returns:
+            預處理後的圖像
+        """
+        try:
+            # 轉換為灰度圖
+            if len(roi.shape) == 3:
+                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = roi.copy()
+            
+            # CLAHE (Contrast Limited Adaptive Histogram Equalization) 增強對比度
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            
+            # 銳化濾波器
+            kernel = np.array([[-1, -1, -1],
+                              [-1,  9, -1],
+                              [-1, -1, -1]])
+            sharpened = cv2.filter2D(enhanced, -1, kernel)
+            
+            # 轉換回BGR格式（EasyOCR需要）
+            if len(roi.shape) == 3:
+                return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
+            else:
+                return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
+                
+        except Exception as e:
+            # 如果預處理失敗，返回原始圖像
+            return roi
+    
+    def set_jersey_number_mapping(self, track_id: int, jersey_number: int):
+        """
+        手動設置球衣號碼映射（用戶標記）
+        
+        Args:
+            track_id: Norfair追蹤ID
+            jersey_number: 球衣號碼
+        """
+        if jersey_number not in self.jersey_to_stable_id:
+            self.jersey_to_stable_id[jersey_number] = jersey_number
 
     def _iou(self, boxA, boxB):
         # 標準IOU計算
@@ -714,6 +899,7 @@ class VolleyballAnalyzer:
             "players_tracking": [],  # 球員追蹤數據
             "scores": [],
             "game_states": [],  # 遊戲狀態（Play/No-Play/Timeout等）
+            "plays": [],  # 回合（Play/Rally）列表 - 從 No-Play 到 Play 開始，從 Play 到 No-Play 結束
             "analysis_time": time.time()
         }
         
@@ -793,7 +979,7 @@ class VolleyballAnalyzer:
                 
                 # ----- 球員偵測 + 追蹤 -----
                 players = self.detect_players(frame)
-                tracked_players = self.track_players(players)
+                tracked_players = self.track_players(players, frame)  # 傳遞frame用於OCR
                 if tracked_players:
                     results["players_tracking"].append({
                         "frame": int(frame_count),
@@ -871,13 +1057,16 @@ class VolleyballAnalyzer:
                 for key in keys_to_finalize:
                     finalize_action(key, frame_count, timestamp)
                 
-                # ----- 簡單的遊戲狀態判斷：有動作時為Play，否則為No-Play -----
-                # 這是一個簡化實現，實際可以根據動作類型、球位置等更精確判斷
+                # ----- 遊戲狀態判斷和回合檢測 -----
+                # 簡單的遊戲狀態判斷：有動作時為Play，否則為No-Play
                 has_action = len(actions) > 0 or ball_info is not None
                 current_state = "Play" if has_action else "No-Play"
                 
+                # 獲取上一個狀態
+                previous_state = results["game_states"][-1]["state"] if results["game_states"] else None
+                
                 # 更新遊戲狀態（簡單邏輯：如果狀態改變，記錄新狀態段）
-                if not results["game_states"] or results["game_states"][-1]["state"] != current_state:
+                if not results["game_states"] or previous_state != current_state:
                     results["game_states"].append({
                         "state": current_state,
                         "start_frame": int(frame_count),
@@ -885,10 +1074,56 @@ class VolleyballAnalyzer:
                         "start_timestamp": timestamp,
                         "end_timestamp": timestamp
                     })
+                    
+                    # 回合檢測：從 No-Play 轉換到 Play = 新回合開始
+                    if previous_state == "No-Play" and current_state == "Play":
+                        # 開始新回合
+                        results["plays"].append({
+                            "play_id": len(results["plays"]) + 1,
+                            "start_frame": int(frame_count),
+                            "start_timestamp": timestamp,
+                            "end_frame": None,  # 將在回合結束時設置
+                            "end_timestamp": None,
+                            "duration": None,
+                            "actions": [],  # 將在回合結束時填充
+                            "scores": []  # 將在回合結束時填充
+                        })
+                    
+                    # 回合結束：從 Play 轉換到 No-Play = 當前回合結束
+                    elif previous_state == "Play" and current_state == "No-Play":
+                        if results["plays"]:
+                            current_play = results["plays"][-1]
+                            if current_play["end_frame"] is None:  # 確保回合還沒結束
+                                current_play["end_frame"] = int(frame_count - 1)  # 上一幀是回合最後一幀
+                                current_play["end_timestamp"] = timestamp - (1.0 / fps_scalar)
+                                current_play["duration"] = current_play["end_timestamp"] - current_play["start_timestamp"]
+                                
+                                # 收集該回合內的動作和得分
+                                play_start_frame = current_play["start_frame"]
+                                play_end_frame = current_play["end_frame"]
+                                
+                                # 收集回合內的動作
+                                for action in results["action_recognition"]["actions"]:
+                                    action_frame = action.get("frame", 0)
+                                    if play_start_frame <= action_frame <= play_end_frame:
+                                        current_play["actions"].append(action)
+                                
+                                # 收集回合內的得分
+                                for score in results["scores"]:
+                                    score_frame = score.get("frame", 0)
+                                    if play_start_frame <= score_frame <= play_end_frame:
+                                        current_play["scores"].append(score)
                 else:
                     # 更新當前狀態段的結束時間
                     results["game_states"][-1]["end_frame"] = int(frame_count)
                     results["game_states"][-1]["end_timestamp"] = timestamp
+                    
+                    # 如果當前是 Play 狀態，更新當前回合的結束時間（臨時，直到狀態改變）
+                    if current_state == "Play" and results["plays"]:
+                        current_play = results["plays"][-1]
+                        if current_play["end_frame"] is None:  # 回合還在進行中
+                            # 只更新結束時間作為臨時值，狀態改變時會正式設置
+                            pass
                 
                 # 進度顯示和回調
                 if frame_count % 10 == 0 or frame_count == total_frames:  # 每10幀或最後一幀更新一次
@@ -907,6 +1142,30 @@ class VolleyballAnalyzer:
             final_timestamp = float(frame_count) / fps_scalar if frame_count > 0 else 0.0
             for key in list(active_actions.keys()):
                 finalize_action(key, frame_count, final_timestamp)
+            
+            # 完成未結束的回合（如果視頻結束時還在 Play 狀態）
+            if results["plays"]:
+                current_play = results["plays"][-1]
+                if current_play["end_frame"] is None:  # 回合還沒結束
+                    current_play["end_frame"] = int(frame_count)
+                    current_play["end_timestamp"] = final_timestamp
+                    current_play["duration"] = current_play["end_timestamp"] - current_play["start_timestamp"]
+                    
+                    # 收集該回合內的動作和得分
+                    play_start_frame = current_play["start_frame"]
+                    play_end_frame = current_play["end_frame"]
+                    
+                    # 收集回合內的動作
+                    for action in results["action_recognition"]["actions"]:
+                        action_frame = action.get("frame", 0)
+                        if play_start_frame <= action_frame <= play_end_frame:
+                            current_play["actions"].append(action)
+                    
+                    # 收集回合內的得分
+                    for score in results["scores"]:
+                        score_frame = score.get("frame", 0)
+                        if play_start_frame <= score_frame <= play_end_frame:
+                            current_play["scores"].append(score)
         
         finally:
             cap.release()
@@ -926,6 +1185,7 @@ class VolleyballAnalyzer:
         print(f"👥 球員偵測: 總框數 {results['player_detection']['total_players_detected']}")
         print(f"⚽ 球追蹤: {results['ball_tracking']['detected_frames']}/{total_frames} 幀")
         print(f"🏐 動作識別: {results['action_recognition']['total_actions']} 個動作")
+        print(f"🎮 回合檢測: {len(results['plays'])} 個回合")
         
         # 保存結果
         if output_path:

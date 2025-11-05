@@ -147,8 +147,8 @@ export const Dashboard: React.FC = () => {
                   <div className="p-6 flex flex-col h-full">
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors" title={v.filename}>
-                          {v.filename}
+                        <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors" title={v.original_filename || v.filename || 'Untitled Video'}>
+                          {v.original_filename || v.filename || 'Untitled Video'}
                         </h3>
                         <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3" />

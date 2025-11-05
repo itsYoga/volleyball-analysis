@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getVideos, updateVideoName } from '../services/api';
+import { getVideos, updateVideoName, deleteVideo } from '../services/api';
 import { EmptyState } from './ui/EmptyState';
 import { StatusBadge } from './ui/StatusBadge';
-import { PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2, Edit2, Check, X } from 'lucide-react';
+import { PlayCircle, Calendar, Search, Filter, Video as VideoIcon, Loader2, Edit2, Check, X, Trash2 } from 'lucide-react';
 
 export const VideoLibrary: React.FC = () => {
   const [videos, setVideos] = useState<any[]>([]);
@@ -12,6 +12,8 @@ export const VideoLibrary: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [editingVideoId, setEditingVideoId] = useState<string | null>(null);
   const [editName, setEditName] = useState<string>('');
+  const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -41,8 +43,14 @@ export const VideoLibrary: React.FC = () => {
     };
   }, []);
 
+  // 輔助函數：獲取顯示用的文件名（優先使用 original_filename）
+  const getDisplayFilename = (video: any) => {
+    return video.original_filename || video.filename || 'Untitled Video';
+  };
+
   const filteredVideos = videos.filter(v => {
-    const matchesSearch = v.filename.toLowerCase().includes(searchQuery.toLowerCase());
+    const displayName = getDisplayFilename(v).toLowerCase();
+    const matchesSearch = displayName.includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === 'all' || v.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -80,6 +88,29 @@ export const VideoLibrary: React.FC = () => {
   const handleCancelEdit = () => {
     setEditingVideoId(null);
     setEditName('');
+  };
+
+  const handleDeleteClick = (videoId: string) => {
+    setShowDeleteConfirm(videoId);
+  };
+
+  const handleDeleteConfirm = async (videoId: string) => {
+    setDeletingVideoId(videoId);
+    try {
+      await deleteVideo(videoId);
+      // 從列表中移除
+      setVideos(videos.filter(v => v.id !== videoId));
+      setShowDeleteConfirm(null);
+    } catch (error) {
+      console.error('Failed to delete video:', error);
+      alert('刪除視頻失敗，請重試');
+    } finally {
+      setDeletingVideoId(null);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteConfirm(null);
   };
 
   return (
@@ -205,17 +236,31 @@ export const VideoLibrary: React.FC = () => {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-2 group">
-                          <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors flex-1" title={v.filename}>
-                            {v.filename}
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-gray-900 truncate group-hover:text-blue-600 transition-colors flex-1" title={getDisplayFilename(v)}>
+                            {getDisplayFilename(v)}
                           </h3>
-                          <button
-                            onClick={() => handleStartEdit(v.id, v.filename)}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-blue-600 transition-all"
-                            title="Rename video"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button
+                              onClick={() => handleStartEdit(v.id, getDisplayFilename(v))}
+                              className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                              title="Rename video"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClick(v.id)}
+                              className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                              title="Delete video"
+                              disabled={deletingVideoId === v.id}
+                            >
+                              {deletingVideoId === v.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
                         </div>
                       )}
                       <p className="text-sm text-gray-500 mt-2 flex items-center gap-1">
@@ -241,6 +286,43 @@ export const VideoLibrary: React.FC = () => {
           </div>
         )}
       </section>
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleDeleteCancel}>
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Confirm Delete</h3>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete this video? This action will permanently delete the video file and analysis results, and cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={handleDeleteCancel}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteConfirm(showDeleteConfirm)}
+                disabled={deletingVideoId === showDeleteConfirm}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {deletingVideoId === showDeleteConfirm ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Confirm Delete
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

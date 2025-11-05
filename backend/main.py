@@ -12,7 +12,7 @@ import os
 import uuid
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 import asyncio
 from pathlib import Path
 from pydantic import BaseModel
@@ -47,15 +47,207 @@ app.mount("/static", StaticFiles(directory=(PROJECT_ROOT / "static")), name="sta
 # 數據存儲目錄
 UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 RESULTS_DIR = PROJECT_ROOT / "data" / "results"
+# 也檢查 backend/data 目錄（兼容舊版本）
+BACKEND_UPLOAD_DIR = BACKEND_DIR / "data" / "uploads"
+BACKEND_RESULTS_DIR = BACKEND_DIR / "data" / "results"
+DB_FILE = PROJECT_ROOT / "data" / "videos_db.json"  # 數據庫文件
+JERSEY_MAPPINGS_FILE = PROJECT_ROOT / "data" / "jersey_mappings.json"  # 球衣號碼映射文件
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
+os.makedirs(DB_FILE.parent, exist_ok=True)
+
+# 球衣號碼映射存儲
+jersey_mappings = {}  # {video_id: {track_id: jersey_number}}
+
+def load_jersey_mappings():
+    """載入球衣號碼映射"""
+    global jersey_mappings
+    if JERSEY_MAPPINGS_FILE.exists():
+        try:
+            with open(JERSEY_MAPPINGS_FILE, 'r', encoding='utf-8') as f:
+                jersey_mappings = json.load(f)
+            print(f"✅ 載入球衣號碼映射: {len(jersey_mappings)} 個視頻")
+        except Exception as e:
+            print(f"⚠️  載入映射失敗: {e}")
+            jersey_mappings = {}
+    else:
+        jersey_mappings = {}
+
+def save_jersey_mappings():
+    """保存球衣號碼映射"""
+    try:
+        with open(JERSEY_MAPPINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(jersey_mappings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️  保存映射失敗: {e}")
+
+# 啟動時載入映射
+load_jersey_mappings()
 
 # 模擬數據庫 (實際應用中應使用PostgreSQL)
 videos_db = []
 analysis_tasks = {}
 
+def load_videos_db():
+    """從文件載入視頻數據庫"""
+    global videos_db
+    if DB_FILE.exists():
+        try:
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
+                videos_db = json.load(f)
+            print(f"✅ 載入 {len(videos_db)} 個視頻記錄")
+        except Exception as e:
+            print(f"⚠️  載入數據庫失敗: {e}")
+            videos_db = []
+    else:
+        videos_db = []
+
+def save_videos_db():
+    """保存視頻數據庫到文件"""
+    try:
+        with open(DB_FILE, 'w', encoding='utf-8') as f:
+            json.dump(videos_db, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️  保存數據庫失敗: {e}")
+
+def scan_existing_videos():
+    """掃描 data 文件夾，自動恢復已存在的視頻記錄"""
+    global videos_db
+    existing_ids = {v["id"] for v in videos_db}
+    
+    # 掃描 uploads 文件夾（檢查兩個可能的位置）
+    upload_dirs = [UPLOAD_DIR]
+    if BACKEND_UPLOAD_DIR.exists():
+        upload_dirs.append(BACKEND_UPLOAD_DIR)
+    
+    for upload_dir in upload_dirs:
+        if upload_dir.exists():
+            for file_path in upload_dir.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
+                    # 從文件名提取 video_id（格式：{video_id}.{ext}）
+                    video_id = file_path.stem
+                    
+                    if video_id not in existing_ids:
+                        # 使用相對於 PROJECT_ROOT 的路徑
+                        relative_path = str(file_path.relative_to(PROJECT_ROOT))
+                        # 檢查是否有對應的結果文件（檢查兩個可能的位置）
+                        results_file = RESULTS_DIR / f"{video_id}_results.json"
+                        if not results_file.exists() and BACKEND_RESULTS_DIR.exists():
+                            results_file = BACKEND_RESULTS_DIR / f"{video_id}_results.json"
+                        
+                        status = "completed" if results_file.exists() else "uploaded"
+                        
+                        # 嘗試從文件名中提取有意義的名稱（如果文件名是 UUID，使用默認名稱）
+                        display_filename = file_path.name
+                        # 如果文件名看起來像 UUID（36個字符，包含連字符），使用一個更友好的名稱
+                        if len(file_path.stem) == 36 and file_path.stem.count('-') == 4:
+                            # 使用文件大小和日期來生成一個友好的名稱
+                            file_size_mb = file_path.stat().st_size / (1024 * 1024)
+                            date_str = datetime.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d')
+                            display_filename = f"Video_{date_str}_{file_size_mb:.0f}MB{file_path.suffix}"
+                        
+                        video_data = {
+                            "id": video_id,
+                            "filename": display_filename,  # 使用更友好的文件名
+                            "original_filename": display_filename,  # 如果沒有原始文件名，使用當前文件名
+                            "file_path": relative_path,
+                            "upload_time": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                            "status": status,
+                            "file_size": file_path.stat().st_size
+                        }
+                        
+                        # 如果數據庫中已經有這個視頻記錄，保留其 original_filename
+                        existing_video = next((v for v in videos_db if v["id"] == video_id), None)
+                        if existing_video and existing_video.get("original_filename"):
+                            video_data["original_filename"] = existing_video["original_filename"]
+                            video_data["filename"] = existing_video["original_filename"]  # 優先使用原始文件名
+                        
+                        if status == "completed":
+                            video_data["analysis_time"] = datetime.fromtimestamp(results_file.stat().st_mtime).isoformat()
+                        
+                        videos_db.append(video_data)
+                        existing_ids.add(video_id)
+                        print(f"✅ 恢復視頻記錄: {file_path.name} ({status})")
+    
+    # 掃描 results 文件夾（檢查兩個可能的位置）
+    results_dirs = [RESULTS_DIR]
+    if BACKEND_RESULTS_DIR.exists():
+        results_dirs.append(BACKEND_RESULTS_DIR)
+    
+    for results_dir in results_dirs:
+        if results_dir.exists():
+            for results_file in results_dir.iterdir():
+                if results_file.is_file() and results_file.suffix == '.json':
+                    video_id = results_file.stem.replace('_results', '')
+                    
+                    if video_id not in existing_ids:
+                        # 檢查是否有對應的上傳文件（檢查兩個可能的位置）
+                        upload_file = None
+                        for upload_dir in upload_dirs:
+                            if upload_dir.exists():
+                                upload_file = upload_dir / f"{video_id}.mp4"
+                                if not upload_file.exists():
+                                    # 嘗試其他擴展名
+                                    for ext in ['.avi', '.mov', '.mkv', '.webm']:
+                                        upload_file = upload_dir / f"{video_id}{ext}"
+                                        if upload_file.exists():
+                                            break
+                                if upload_file and upload_file.exists():
+                                    break
+                        
+                        if upload_file and upload_file.exists():
+                            relative_path = str(upload_file.relative_to(PROJECT_ROOT))
+                            
+                            # 嘗試從文件名中提取有意義的名稱
+                            display_filename = upload_file.name
+                            if len(upload_file.stem) == 36 and upload_file.stem.count('-') == 4:
+                                file_size_mb = upload_file.stat().st_size / (1024 * 1024)
+                                date_str = datetime.fromtimestamp(upload_file.stat().st_mtime).strftime('%Y-%m-%d')
+                                display_filename = f"Video_{date_str}_{file_size_mb:.0f}MB{upload_file.suffix}"
+                            
+                            video_data = {
+                                "id": video_id,
+                                "filename": display_filename,
+                                "original_filename": display_filename,  # 如果沒有原始文件名，使用當前文件名
+                                "file_path": relative_path,
+                                "upload_time": datetime.fromtimestamp(upload_file.stat().st_mtime).isoformat(),
+                                "status": "completed",
+                                "file_size": upload_file.stat().st_size,
+                                "analysis_time": datetime.fromtimestamp(results_file.stat().st_mtime).isoformat()
+                            }
+                            
+                            # 如果數據庫中已經有這個視頻記錄，保留其 original_filename
+                            existing_video = next((v for v in videos_db if v["id"] == video_id), None)
+                            if existing_video and existing_video.get("original_filename"):
+                                video_data["original_filename"] = existing_video["original_filename"]
+                                video_data["filename"] = existing_video["original_filename"]  # 優先使用原始文件名
+                            
+                            videos_db.append(video_data)
+                            existing_ids.add(video_id)
+                            print(f"✅ 恢復視頻記錄（從結果文件）: {upload_file.name}")
+    
+    # 保存更新後的數據庫
+    if videos_db:
+        save_videos_db()
+
+# 啟動時載入數據
+load_videos_db()
+scan_existing_videos()
+
 class VideoUpdateRequest(BaseModel):
     new_filename: str
+
+class JerseyNumberMappingRequest(BaseModel):
+    video_id: str
+    track_id: int
+    jersey_number: int
+    frame: int  # 可選：標記時的幀號
+    bbox: List[float]  # 可選：標記時的邊界框
+
+class JerseyNumberMappingResponse(BaseModel):
+    success: bool
+    message: str
+    mapping: Optional[Dict] = None
 
 @app.get("/")
 async def root():
@@ -92,15 +284,18 @@ async def upload_video(file: UploadFile = File(...)):
         
         # 記錄到數據庫（使用相對路徑，方便存儲）
         relative_path = str(Path(file_path).relative_to(PROJECT_ROOT))
+        original_filename = file.filename  # 保存原始文件名
         video_data = {
             "id": video_id,
-            "filename": file.filename,
+            "filename": original_filename,  # 顯示用的文件名（使用原始文件名）
+            "original_filename": original_filename,  # 原始文件名（永遠不會改變）
             "file_path": relative_path,  # 使用相對路徑
             "upload_time": datetime.now().isoformat(),
             "status": "uploaded",
             "file_size": bytes_written
         }
         videos_db.append(video_data)
+        save_videos_db()  # 保存到文件
         
         return {
             "video_id": video_id,
@@ -133,6 +328,7 @@ async def start_analysis(video_id: str, background_tasks: BackgroundTasks):
         # 更新影片狀態
         video["status"] = "processing"
         video["task_id"] = task_id
+        save_videos_db()  # 保存到文件
         
         # 添加背景任務 (實際應用中應使用Celery)
         background_tasks.add_task(process_video, video_id, task_id)
@@ -171,8 +367,12 @@ async def get_analysis_status(task_id: str):
 async def get_analysis_results(video_id: str):
     """獲取分析結果"""
     try:
-        results_file = os.path.join(RESULTS_DIR, f"{video_id}_results.json")
-        if not os.path.exists(results_file):
+        # 檢查兩個可能的位置
+        results_file = RESULTS_DIR / f"{video_id}_results.json"
+        if not results_file.exists() and BACKEND_RESULTS_DIR.exists():
+            results_file = BACKEND_RESULTS_DIR / f"{video_id}_results.json"
+        
+        if not results_file.exists():
             raise HTTPException(status_code=404, detail="分析結果不存在")
         
         with open(results_file, 'r', encoding='utf-8') as f:
@@ -181,7 +381,136 @@ async def get_analysis_results(video_id: str):
         return results
     
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=f"獲取結果失敗: {str(e)}")
+
+@app.delete("/videos/{video_id}")
+async def delete_video(video_id: str):
+    """刪除視頻及其相關文件"""
+    try:
+        # 查找視頻
+        video = next((v for v in videos_db if v["id"] == video_id), None)
+        if not video:
+            raise HTTPException(status_code=404, detail="影片不存在")
+        
+        # 刪除視頻文件
+        video_path = video.get("file_path")
+        if video_path:
+            # 確保路徑是絕對路徑
+            if not os.path.isabs(video_path):
+                video_path = str(PROJECT_ROOT / video_path)
+            
+            video_path = os.path.normpath(video_path)
+            
+            # 嘗試刪除視頻文件（如果存在）
+            if os.path.exists(video_path):
+                try:
+                    os.remove(video_path)
+                    print(f"✅ 已刪除視頻文件: {video_path}")
+                except Exception as e:
+                    print(f"⚠️  刪除視頻文件失敗: {e}")
+            
+            # 也嘗試刪除 backend/data 目錄中的文件（如果存在）
+            backend_video_path = str(BACKEND_UPLOAD_DIR / os.path.basename(video_path))
+            if os.path.exists(backend_video_path):
+                try:
+                    os.remove(backend_video_path)
+                    print(f"✅ 已刪除備份視頻文件: {backend_video_path}")
+                except Exception as e:
+                    print(f"⚠️  刪除備份視頻文件失敗: {e}")
+        
+        # 刪除結果文件（檢查兩個可能的位置）
+        results_file = RESULTS_DIR / f"{video_id}_results.json"
+        if results_file.exists():
+            try:
+                results_file.unlink()
+                print(f"✅ 已刪除結果文件: {results_file}")
+            except Exception as e:
+                print(f"⚠️  刪除結果文件失敗: {e}")
+        
+        backend_results_file = BACKEND_RESULTS_DIR / f"{video_id}_results.json"
+        if backend_results_file.exists():
+            try:
+                backend_results_file.unlink()
+                print(f"✅ 已刪除備份結果文件: {backend_results_file}")
+            except Exception as e:
+                print(f"⚠️  刪除備份結果文件失敗: {e}")
+        
+        # 從數據庫中移除
+        videos_db[:] = [v for v in videos_db if v["id"] != video_id]
+        save_videos_db()  # 保存到文件
+        
+        # 刪除相關的分析任務
+        task_ids_to_remove = [task_id for task_id, task in analysis_tasks.items() if task.get("video_id") == video_id]
+        for task_id in task_ids_to_remove:
+            del analysis_tasks[task_id]
+        
+        return {
+            "message": "視頻已成功刪除",
+            "video_id": video_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除視頻失敗: {str(e)}")
+
+@app.post("/videos/{video_id}/jersey-mapping")
+async def set_jersey_mapping(video_id: str, request: JerseyNumberMappingRequest):
+    """設置玩家球衣號碼映射（用戶手動標記）"""
+    try:
+        # 驗證視頻存在
+        video = next((v for v in videos_db if v["id"] == video_id), None)
+        if not video:
+            raise HTTPException(status_code=404, detail="影片不存在")
+        
+        # 初始化該視頻的映射字典
+        if video_id not in jersey_mappings:
+            jersey_mappings[video_id] = {}
+        
+        # 保存映射：track_id -> jersey_number
+        jersey_mappings[video_id][str(request.track_id)] = {
+            "jersey_number": request.jersey_number,
+            "frame": request.frame,
+            "bbox": request.bbox,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        save_jersey_mappings()
+        
+        return {
+            "success": True,
+            "message": f"已設置追蹤ID {request.track_id} 的球衣號碼為 {request.jersey_number}",
+            "mapping": jersey_mappings[video_id][str(request.track_id)]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"設置映射失敗: {str(e)}")
+
+@app.get("/videos/{video_id}/jersey-mappings")
+async def get_jersey_mappings(video_id: str):
+    """獲取視頻的所有球衣號碼映射"""
+    if video_id not in jersey_mappings:
+        return {"mappings": {}}
+    
+    return {"mappings": jersey_mappings[video_id]}
+
+@app.delete("/videos/{video_id}/jersey-mapping/{track_id}")
+async def delete_jersey_mapping(video_id: str, track_id: str):
+    """刪除球衣號碼映射"""
+    try:
+        if video_id in jersey_mappings and track_id in jersey_mappings[video_id]:
+            del jersey_mappings[video_id][track_id]
+            save_jersey_mappings()
+            return {"success": True, "message": f"已刪除追蹤ID {track_id} 的映射"}
+        else:
+            raise HTTPException(status_code=404, detail="映射不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除映射失敗: {str(e)}")
 
 @app.put("/videos/{video_id}")
 async def update_video(video_id: str, request: VideoUpdateRequest):
@@ -190,7 +519,12 @@ async def update_video(video_id: str, request: VideoUpdateRequest):
     if not video:
         raise HTTPException(status_code=404, detail="影片不存在")
     
+    # 更新顯示文件名，但保留 original_filename（如果存在）
     video["filename"] = request.new_filename
+    # 如果沒有 original_filename，設置它為當前文件名（第一次設置）
+    if "original_filename" not in video or not video.get("original_filename"):
+        video["original_filename"] = request.new_filename
+    save_videos_db()  # 保存到文件
     return {"message": "視頻名稱已更新", "video": video}
 
 @app.get("/play/{video_id}")
@@ -373,6 +707,7 @@ async def process_video(video_id: str, task_id: str):
         if video:
             video["status"] = "completed"
             video["analysis_time"] = datetime.now().isoformat()
+            save_videos_db()  # 保存到文件
     
     except Exception as e:
         analysis_tasks[task_id]["status"] = "failed"
