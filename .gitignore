@@ -51,6 +51,8 @@ lerna-debug.log*
 # Uploaded videos and analysis results
 data/uploads/
 data/results/
+# JSON files in data directory (jersey_mappings.json, videos_db.json, etc.)
+data/*.json
 backend/data/uploads/
 backend/data/results/
 static/uploads/
