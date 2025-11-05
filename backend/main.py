@@ -112,7 +112,6 @@ def save_videos_db():
 
 def scan_existing_videos():
     """掃描 data 文件夾，自動恢復已存在的視頻記錄"""
-    global videos_db
     existing_ids = {v["id"] for v in videos_db}
     
     # 掃描 uploads 文件夾（檢查兩個可能的位置）
