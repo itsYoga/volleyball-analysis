@@ -308,13 +308,44 @@ export const PlayerStats: React.FC<PlayerStatsProps> = ({
     return stats;
   }, [playerIds, playerActions]);
 
-  // Filter out players with no actions (must be before any early returns)
+  // Filter players: show players with actions OR players with jersey numbers detected
+  // 顯示有 actions 的球員，或者有球衣號碼檢測但沒有 actions 的球員
   const playersWithActions = useMemo(() => {
     return playerIds.filter(playerId => {
       const actionsList = playerActions[playerId] || [];
-      return actionsList.length > 0;
+      const hasActions = actionsList.length > 0;
+      
+      // 如果沒有 actions，檢查是否有球衣號碼檢測
+      if (!hasActions) {
+        // 檢查這個 playerId 是否是球衣號碼（通過 trackIdToJerseyMap）
+        const isJerseyNumber = Object.values(trackIdToJerseyMap).includes(playerId);
+        
+        // 或者檢查 playerTracks 中是否有這個 playerId 對應的球衣號碼
+        let hasJerseyInTracks = false;
+        for (const track of playerTracks) {
+          if (track.players) {
+            for (const player of track.players) {
+              const jerseyNumber = player.jersey_number;
+              const stableId = player.stable_id;
+              // 如果 playerId 是球衣號碼或 stable_id，且不等於 track_id
+              if ((jerseyNumber === playerId || stableId === playerId) && 
+                  jerseyNumber !== undefined && 
+                  jerseyNumber !== null && 
+                  jerseyNumber !== player.id) {
+                hasJerseyInTracks = true;
+                break;
+              }
+            }
+            if (hasJerseyInTracks) break;
+          }
+        }
+        
+        return isJerseyNumber || hasJerseyInTracks;
+      }
+      
+      return hasActions;
     });
-  }, [playerIds, playerActions]);
+  }, [playerIds, playerActions, trackIdToJerseyMap, playerTracks]);
 
   // 獲取玩家的顯示信息（包括球衣號碼）
   // 這個函數需要訪問 trackIdToJerseyMap，所以定義在它之後

@@ -20,7 +20,17 @@ export const PlayerHeatmap: React.FC<PlayerHeatmapProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   useEffect(() => {
-    if (!enabled || !videoSize?.width || !videoSize?.height || !canvasRef.current) return;
+    if (!enabled || !videoSize?.width || !videoSize?.height || !canvasRef.current) {
+      if (enabled) {
+        console.log('PlayerHeatmap: Disabled or missing requirements', {
+          enabled,
+          hasCanvas: !!canvasRef.current,
+          videoSize,
+          tracksCount: playerTracks?.length || 0
+        });
+      }
+      return;
+    }
     
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
@@ -81,10 +91,11 @@ export const PlayerHeatmap: React.FC<PlayerHeatmapProps> = ({
       ref={canvasRef}
       width={videoSize.width || 640}
       height={videoSize.height || 360}
-      className="absolute left-0 top-0 pointer-events-none"
+      className="absolute left-0 top-0 pointer-events-none z-5"
       style={{
         width: '100%',
-        height: 'auto'
+        height: '100%',
+        objectFit: 'contain'
       }}
     />
   );

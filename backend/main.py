@@ -648,6 +648,7 @@ async def process_video(video_id: str, task_id: str):
         ball_model = str(models_dir / "VballNetV1_seq9_grayscale_148_h288_w512.onnx")
         action_model = str(models_dir / "action_recognition_yv11m.pt")
         player_model = str(models_dir / "player_detection_yv8.pt")
+        jersey_number_model = str(models_dir / "jersey_number_detection.pt")
 
         # 更新進度
         analysis_tasks[task_id]["progress"] = 5
@@ -671,6 +672,7 @@ async def process_video(video_id: str, task_id: str):
                 ball_model_path=ball_model if os.path.exists(ball_model) else None,
                 action_model_path=action_model if os.path.exists(action_model) else None,
                 player_model_path=player_model if os.path.exists(player_model) else None,
+                jersey_number_model_path=jersey_number_model if os.path.exists(jersey_number_model) else None,
                 device="cpu"
             )
             return analyzer.analyze_video(video_path, str(results_path), progress_callback=update_progress)

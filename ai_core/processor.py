@@ -32,6 +32,7 @@ class VolleyballAnalyzer:
                  ball_model_path: str = None,
                  action_model_path: str = None,
                  player_model_path: str = None,
+                 jersey_number_model_path: str = None,
                  device: str = "cpu"):
         """
         初始化分析器
@@ -39,12 +40,15 @@ class VolleyballAnalyzer:
         Args:
             ball_model_path: 球追蹤模型路徑 (ONNX格式)
             action_model_path: 動作識別模型路徑 (YOLO格式)
+            player_model_path: 球員偵測模型路徑 (YOLO格式)
+            jersey_number_model_path: 球衣號碼檢測模型路徑 (YOLO格式)
             device: 運行設備 ('cpu', 'cuda', 'mps')
         """
         self.device = device
         self.ball_model = None
         self.action_model = None
         self.player_model = None
+        self.jersey_number_yolo_model = None  # YOLOv8 球衣號碼檢測模型
         
         # 載入球追蹤模型
         if ball_model_path and os.path.exists(ball_model_path):
@@ -57,6 +61,10 @@ class VolleyballAnalyzer:
         # 載入球員偵測模型
         if player_model_path and os.path.exists(player_model_path):
             self.load_player_model(player_model_path)
+        
+        # 載入球衣號碼檢測模型 (YOLOv8)
+        if jersey_number_model_path and os.path.exists(jersey_number_model_path):
+            self.load_jersey_number_model(jersey_number_model_path)
         
         # 新增追蹤器實例 - 使用 bbox 模式（類似 volleyball_analytics-main）
         # 優化參數以減少ID碎片化：
@@ -71,9 +79,10 @@ class VolleyballAnalyzer:
         )
         
         # 球衣號碼OCR相關
-        self.jersey_number_model = None
+        self.jersey_number_model = None  # EasyOCR 模型（備選方案）
         self.jersey_number_cache = {}  # 緩存 (track_id, bbox) -> jersey_number
         self.jersey_to_stable_id = {}  # 球衣號碼 -> 穩定ID映射
+        self.jersey_to_track_ids = {}  # 球衣號碼 -> [track_ids] 映射（用於追蹤穩定性）
         self.next_stable_id = 1  # 下一個穩定ID
         self.track_id_to_jersey_history = {}  # 追蹤ID -> [jersey_numbers] 歷史記錄（用於多幀融合）
     
@@ -103,6 +112,18 @@ class VolleyballAnalyzer:
         except Exception as e:
             print(f"❌ 球員偵測模型載入失敗: {e}")
             self.player_model = None
+    
+    def load_jersey_number_model(self, model_path: str):
+        """載入球衣號碼檢測模型 (YOLOv8)"""
+        try:
+            self.jersey_number_yolo_model = YOLO(model_path)
+            print(f"✅ 球衣號碼檢測模型載入成功: {model_path}")
+            # 打印模型類別信息（用於調試）
+            if hasattr(self.jersey_number_yolo_model, 'names'):
+                print(f"   模型類別: {self.jersey_number_yolo_model.names}")
+        except Exception as e:
+            print(f"❌ 球衣號碼檢測模型載入失敗: {e}")
+            self.jersey_number_yolo_model = None
     
     def detect_ball(self, frame: np.ndarray) -> Optional[Dict]:
         """
@@ -583,6 +604,8 @@ class VolleyballAnalyzer:
         """
         獲取穩定的玩家ID和球衣號碼（分開返回）
         
+        改善追蹤穩定性：當檢測到相同的球衣號碼時，即使 track_id 改變，也使用相同的 stable_id
+        
         Returns:
             (stable_id, jersey_number): 
             - stable_id: 穩定ID（基於球衣號碼或追蹤ID）
@@ -597,21 +620,74 @@ class VolleyballAnalyzer:
             if jersey_num and jersey_num in self.jersey_to_stable_id:
                 return (self.jersey_to_stable_id[jersey_num], jersey_num)
         
-        # 嘗試OCR識別球衣號碼（每10幀執行一次，避免太慢）
-        if EASYOCR_AVAILABLE and frame is not None and track_id % 10 == 0:
+        # 嘗試識別球衣號碼（每5幀執行一次，提高檢測頻率）
+        # 優先使用 YOLOv8 模型，如果不可用則使用 EasyOCR
+        if frame is not None and track_id % 5 == 0:  # 從每10幀改為每5幀
             jersey_num = self._detect_jersey_number(frame, bbox, track_id)
             if jersey_num:
                 self.jersey_number_cache[cache_key] = jersey_num
-                if jersey_num not in self.jersey_to_stable_id:
+                
+                # 改善追蹤穩定性：檢查這個球衣號碼是否已經被其他 track_id 使用過
+                if jersey_num in self.jersey_to_track_ids:
+                    # 如果這個球衣號碼已經有對應的 track_ids，使用相同的 stable_id
+                    # 這確保即使 track_id 改變，只要球衣號碼相同，stable_id 保持不變
+                    if jersey_num in self.jersey_to_stable_id:
+                        stable_id = self.jersey_to_stable_id[jersey_num]
+                    else:
+                        # 第一次檢測到這個球衣號碼，使用球衣號碼作為 stable_id
+                        stable_id = jersey_num
+                        self.jersey_to_stable_id[jersey_num] = stable_id
+                    
+                    # 記錄當前 track_id 到這個球衣號碼的映射
+                    if track_id not in self.jersey_to_track_ids[jersey_num]:
+                        self.jersey_to_track_ids[jersey_num].append(track_id)
+                    
+                    return (stable_id, jersey_num)
+                else:
+                    # 第一次檢測到這個球衣號碼
                     self.jersey_to_stable_id[jersey_num] = jersey_num
-                return (jersey_num, jersey_num)  # 如果檢測到球衣號碼，stable_id 和 jersey_number 都是球衣號碼
+                    self.jersey_to_track_ids[jersey_num] = [track_id]
+                    return (jersey_num, jersey_num)
+        
+        # 如果沒有檢測到球衣號碼，檢查是否有歷史記錄（從多幀融合中獲取）
+        # 改善：即使當前幀沒有檢測，也檢查歷史記錄
+        if track_id in self.track_id_to_jersey_history:
+            history = self.track_id_to_jersey_history[track_id]
+            if len(history) >= 1:  # 降低閾值：至少1次檢測就可以使用（提高檢測率）
+                from collections import Counter
+                counter = Counter(history)
+                most_common = counter.most_common(1)[0]
+                if most_common[1] >= 1:  # 降低閾值：至少出現1次就可以使用
+                    jersey_num = most_common[0]
+                    # 使用歷史記錄中的球衣號碼
+                    if jersey_num in self.jersey_to_stable_id:
+                        # 檢查這個球衣號碼是否已經被其他 track_id 使用過
+                        if jersey_num in self.jersey_to_track_ids:
+                            if track_id not in self.jersey_to_track_ids[jersey_num]:
+                                self.jersey_to_track_ids[jersey_num].append(track_id)
+                        return (self.jersey_to_stable_id[jersey_num], jersey_num)
+                    else:
+                        self.jersey_to_stable_id[jersey_num] = jersey_num
+                        if jersey_num not in self.jersey_to_track_ids:
+                            self.jersey_to_track_ids[jersey_num] = []
+                        if track_id not in self.jersey_to_track_ids[jersey_num]:
+                            self.jersey_to_track_ids[jersey_num].append(track_id)
+                        return (jersey_num, jersey_num)
+        
+        # 改善：檢查是否有其他 track_id 已經檢測到球衣號碼，並且當前 track_id 在歷史記錄中
+        # 這可以幫助合併相同球衣號碼的不同 track_id
+        for jersey_num, track_ids in self.jersey_to_track_ids.items():
+            if track_id in track_ids:
+                # 這個 track_id 曾經檢測到過這個球衣號碼
+                if jersey_num in self.jersey_to_stable_id:
+                    return (self.jersey_to_stable_id[jersey_num], jersey_num)
         
         # 如果沒有檢測到球衣號碼，stable_id 使用追蹤ID，jersey_number 為 None
         return (track_id, None)
     
     def _detect_jersey_number(self, frame: np.ndarray, bbox: List[float], track_id: int = None) -> Optional[int]:
         """
-        使用OCR識別球衣號碼（改進版：包含圖像預處理和多幀融合）
+        識別球衣號碼（優先使用 YOLOv8 模型，降級到 EasyOCR）
         
         Args:
             frame: 完整幀圖像
@@ -621,9 +697,201 @@ class VolleyballAnalyzer:
         Returns:
             球衣號碼（如果識別成功），否則None
         """
-        if not EASYOCR_AVAILABLE:
+        # 優先使用 YOLOv8 球衣號碼檢測模型
+        if self.jersey_number_yolo_model is not None:
+            result = self._detect_jersey_number_yolo(frame, bbox, track_id)
+            if result is not None:
+                return result
+        
+        # 降級到 EasyOCR（如果可用）
+        if EASYOCR_AVAILABLE:
+            return self._detect_jersey_number_ocr(frame, bbox, track_id)
+        
+        return None
+    
+    def _detect_jersey_number_yolo(self, frame: np.ndarray, bbox: List[float], track_id: int = None) -> Optional[int]:
+        """
+        使用 YOLOv8 模型檢測球衣號碼
+        
+        Args:
+            frame: 完整幀圖像
+            bbox: 玩家邊界框 [x1, y1, x2, y2]
+            track_id: 追蹤ID（用於多幀融合）
+            
+        Returns:
+            球衣號碼（如果識別成功），否則None
+        """
+        try:
+            # 提取玩家區域（主要關注上半身，球衣號碼通常在胸部）
+            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            height = y2 - y1
+            
+            # 提取上半身區域（上半部分，球衣號碼在這裡）
+            roi_top = max(0, y1)
+            roi_bottom = min(frame.shape[0], y1 + int(height * 0.6))  # 上半身60%
+            roi_left = max(0, x1)
+            roi_right = min(frame.shape[1], x2)
+            
+            if roi_bottom <= roi_top or roi_right <= roi_left:
+                return None
+            
+            roi = frame[roi_top:roi_bottom, roi_left:roi_right].copy()
+            
+            if roi.size == 0:
+                return None
+            
+            # 使用 YOLOv8 模型檢測數字（降低置信度閾值以提高檢測率）
+            results = self.jersey_number_yolo_model(roi, verbose=False, conf=0.15, iou=0.4)
+            
+            # 收集所有數字檢測結果
+            digit_detections = []
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        conf = float(box.conf[0].cpu().numpy())
+                        class_id = int(box.cls[0].cpu().numpy())
+                        
+                        # 獲取數字類別名稱
+                        if hasattr(self.jersey_number_yolo_model, 'names'):
+                            class_name = self.jersey_number_yolo_model.names.get(class_id, str(class_id))
+                        else:
+                            class_name = str(class_id)
+                        
+                        # 嘗試從類別名稱提取數字
+                        digit = None
+                        try:
+                            # 如果類別名稱是數字（例如 "0", "1", "2", ...）
+                            if class_name.isdigit():
+                                digit = int(class_name)
+                            # 如果類別ID直接對應數字（0-9）
+                            elif 0 <= class_id <= 9:
+                                digit = class_id
+                        except:
+                            pass
+                        
+                        if digit is not None and 0 <= digit <= 9:
+                            digit_detections.append({
+                                'digit': digit,
+                                'bbox': [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                                'confidence': conf,
+                                'center_x': float((xyxy[0] + xyxy[2]) / 2)
+                            })
+            
+            # 合併數字檢測結果成完整號碼
+            if digit_detections:
+                merged_number = self._merge_digit_detections(digit_detections)
+                if merged_number is not None and 1 <= merged_number <= 99:
+                    # 多幀融合：記錄歷史並投票
+                    if track_id is not None:
+                        if track_id not in self.track_id_to_jersey_history:
+                            self.track_id_to_jersey_history[track_id] = []
+                        
+                        self.track_id_to_jersey_history[track_id].append(merged_number)
+                        
+                        # 只保留最近50次識別結果
+                        if len(self.track_id_to_jersey_history[track_id]) > 50:
+                            self.track_id_to_jersey_history[track_id] = self.track_id_to_jersey_history[track_id][-50:]
+                        
+                        # 投票：返回最常見的號碼（降低閾值以提高檢測率）
+                        from collections import Counter
+                        counter = Counter(self.track_id_to_jersey_history[track_id])
+                        if counter:
+                            most_common = counter.most_common(1)[0]
+                            if most_common[1] >= 1:  # 至少出現1次就可以使用（提高檢測率）
+                                return most_common[0]
+                    
+                    return merged_number
+            
+            return None
+            
+        except Exception as e:
+            # 靜默失敗，降級到 OCR
+            return None
+    
+    def _merge_digit_detections(self, digit_detections: List[Dict]) -> Optional[int]:
+        """
+        合併多個數字檢測結果成完整號碼
+        
+        例如：檢測到 "1" 和 "3" -> 合併成 "13"
+        
+        Args:
+            digit_detections: 數字檢測結果列表，每個包含 {digit, bbox, confidence, center_x}
+            
+        Returns:
+            合併後的完整號碼（1-99），如果無法合併則返回None
+        """
+        if not digit_detections:
             return None
         
+        # 按 x 座標排序（從左到右）
+        sorted_digits = sorted(digit_detections, key=lambda x: x['center_x'])
+        
+        # 過濾掉置信度太低的檢測（降低閾值以提高檢測率）
+        filtered_digits = [d for d in sorted_digits if d['confidence'] >= 0.15]
+        
+        if not filtered_digits:
+            return None
+        
+        # 如果只有一個數字，直接返回（單數字號碼，如 1-9）
+        if len(filtered_digits) == 1:
+            return filtered_digits[0]['digit']
+        
+        # 多個數字：檢查它們是否水平排列（形成兩位數號碼）
+        # 計算數字之間的距離
+        digits_to_merge = []
+        for i, digit_info in enumerate(filtered_digits):
+            if i == 0:
+                digits_to_merge.append(digit_info)
+            else:
+                # 檢查與前一個數字的距離
+                prev_center_x = filtered_digits[i-1]['center_x']
+                curr_center_x = digit_info['center_x']
+                distance = abs(curr_center_x - prev_center_x)
+                
+                # 計算平均數字寬度（用於判斷是否在同一號碼中）
+                avg_width = sum(d['bbox'][2] - d['bbox'][0] for d in filtered_digits) / len(filtered_digits)
+                
+                # 如果距離小於平均寬度的3倍，認為是同一號碼的一部分
+                if distance < avg_width * 3:
+                    digits_to_merge.append(digit_info)
+                else:
+                    # 距離太遠，可能是另一個號碼，只處理第一個號碼
+                    break
+        
+        # 合併數字
+        if len(digits_to_merge) == 1:
+            return digits_to_merge[0]['digit']
+        elif len(digits_to_merge) == 2:
+            # 兩位數號碼
+            tens = digits_to_merge[0]['digit']
+            ones = digits_to_merge[1]['digit']
+            merged = tens * 10 + ones
+            if 1 <= merged <= 99:
+                return merged
+        elif len(digits_to_merge) > 2:
+            # 超過兩個數字，只取前兩個（可能是誤檢測）
+            tens = digits_to_merge[0]['digit']
+            ones = digits_to_merge[1]['digit']
+            merged = tens * 10 + ones
+            if 1 <= merged <= 99:
+                return merged
+        
+        return None
+    
+    def _detect_jersey_number_ocr(self, frame: np.ndarray, bbox: List[float], track_id: int = None) -> Optional[int]:
+        """
+        使用 EasyOCR 識別球衣號碼（備選方案）
+        
+        Args:
+            frame: 完整幀圖像
+            bbox: 玩家邊界框 [x1, y1, x2, y2]
+            track_id: 追蹤ID（用於多幀融合）
+            
+        Returns:
+            球衣號碼（如果識別成功），否則None
+        """
         try:
             # 提取玩家區域（主要關注上半身，球衣號碼通常在胸部）
             x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])

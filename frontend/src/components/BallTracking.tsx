@@ -18,7 +18,16 @@ export const BallTracking: React.FC<BallTrackingProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    if (!enabled || !canvasRef.current || !videoSize?.width || !videoSize?.height) return;
+    if (!enabled || !canvasRef.current || !videoSize?.width || !videoSize?.height) {
+      if (enabled) {
+        console.log('BallTracking: Disabled or missing requirements', {
+          enabled,
+          hasCanvas: !!canvasRef.current,
+          videoSize
+        });
+      }
+      return;
+    }
     
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
@@ -189,10 +198,11 @@ export const BallTracking: React.FC<BallTrackingProps> = ({
       ref={canvasRef}
       width={videoSize.width || 640}
       height={videoSize.height || 360}
-      className="absolute left-0 top-0 pointer-events-none"
+      className="absolute left-0 top-0 pointer-events-none z-10"
       style={{
         width: '100%',
-        height: 'auto'
+        height: '100%',
+        objectFit: 'contain'
       }}
     />
   );
